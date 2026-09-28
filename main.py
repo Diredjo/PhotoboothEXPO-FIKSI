@@ -173,6 +173,9 @@ PEACE_THRESHOLD_MS = 1200     # Peace hold duration
 HAND_MIN_SIZE = 0.05          # Min hand bbox relative to frame
 PRIMARY_USER_SENSITIVITY = 0.35 # How much better newcomer must be to take over
 PRIMARY_USER_GRACE_MS = 2000  # Grace period before switching primary user
+INFERENCE_WIDTH = 640         # Gesture inference resolution width (full-res = slow)
+INFERENCE_HEIGHT = 360        # Gesture inference resolution height
+GESTURE_FACE_INTERVAL = 2     # Run face detection every N gesture frames, reuse in between
 
 # ---- PHOTO ----
 COUNTDOWN_DURATION = 3        # Seconds per countdown
@@ -182,7 +185,12 @@ FRAME_SELECTION_ENABLED = True
 PHOTO_JPEG_QUALITY = 92       # Capture JPEG quality
 
 # ---- PAYMENT ----
-DEMO_MODE = True              # True = demo payment, False = real QRIS
+# Payment mode used by DEFAULT.
+#   'manual'   -> static QRIS image (assets/qris.png) + operator confirms with F9 x3. No gateway/internet.
+#   'demo'     -> simulated demo payment (legacy, for dev/testing).
+#   'midtrans' -> legacy Midtrans QRIS gateway (requires credentials/internet).
+PAYMENT_MODE = "manual"
+DEMO_MODE = False             # Legacy demo toggle kept for the demo provider path
 PHOTOBOOTH_PRICE = 25000      # Price in IDR (Rp)
 PAYMENT_TIMEOUT_SEC = 300     # Payment expiry in seconds
 PAYMENT_POLL_INTERVAL = 2.5   # Seconds between status polls
@@ -199,6 +207,7 @@ PRINT_WIDTH_MM = 100          # 4R paper width
 PRINT_HEIGHT_MM = 150         # 4R paper height
 PRINT_DPI = 300               # Print resolution
 AUTO_PRINT = False            # Auto-print after compositing without confirmation
+PRINT_FALLBACK_SEC = 60       # After this many seconds in PRINTING, show Back/Next escape
 
 # ---- SYSTEM ----
 AUTO_RESET_TIMEOUT = 120      # Idle seconds before auto-returning to landing
@@ -253,12 +262,16 @@ config = {
     "hand_min_size": HAND_MIN_SIZE,
     "primary_user_sensitivity": PRIMARY_USER_SENSITIVITY,
     "primary_user_grace_ms": PRIMARY_USER_GRACE_MS,
+    "inference_width": INFERENCE_WIDTH,
+    "inference_height": INFERENCE_HEIGHT,
+    "gesture_face_interval": GESTURE_FACE_INTERVAL,
     "countdown_duration": COUNTDOWN_DURATION,
     "flash_duration_ms": FLASH_DURATION_MS,
     "retake_enabled": RETAKE_ENABLED,
     "frame_selection_enabled": FRAME_SELECTION_ENABLED,
     "photo_jpeg_quality": PHOTO_JPEG_QUALITY,
     "demo_mode": DEMO_MODE,
+    "payment_mode": PAYMENT_MODE,
     "photobooth_price": PHOTOBOOTH_PRICE,
     "payment_timeout_sec": PAYMENT_TIMEOUT_SEC,
     "printer_name": PRINTER_NAME,
@@ -266,6 +279,7 @@ config = {
     "print_height_mm": PRINT_HEIGHT_MM,
     "print_dpi": PRINT_DPI,
     "auto_print": AUTO_PRINT,
+    "print_fallback_sec": PRINT_FALLBACK_SEC,
     "dark_mode": DARK_MODE,
     "show_fps": SHOW_FPS,
     "show_landmarks": SHOW_LANDMARKS,
@@ -302,7 +316,8 @@ class AppSession:
         self.payment_qr_data: Optional[str] = None
         self.payment_amount: int = PHOTOBOOTH_PRICE
         self.payment_expiry: Optional[float] = None
-        self.print_state: str = "idle"          # idle, printing, success, failed
+        self.print_state: str = "idle"          # idle, printing, success, failed, cancelled
+        self.print_started_mono: Optional[float] = None  # monotonic timestamp when printing started
         self.last_activity: float = time.time()
         self.countdown_active: bool = False
         self.countdown_value: int = 0
@@ -322,6 +337,7 @@ class AppSession:
         self.payment_amount = config["photobooth_price"]
         self.payment_expiry = None
         self.print_state = "idle"
+        self.print_started_mono = None
         self.last_activity = time.time()
         self.countdown_active = False
         self.countdown_value = 0
@@ -352,6 +368,11 @@ class AppSession:
             "payment_amount": self.payment_amount,
             "payment_expiry": self.payment_expiry,
             "print_state": self.print_state,
+            "print_elapsed_sec": (
+                round(time.monotonic() - self.print_started_mono, 1)
+                if self.print_started_mono is not None else 0.0
+            ),
+            "print_fallback_sec": config["print_fallback_sec"],
             "countdown_active": self.countdown_active,
             "countdown_value": self.countdown_value,
             "photo_slots_filled": len(self.photos),
@@ -385,6 +406,8 @@ class GestureState:
         self.peace_progress = 0.0  # 0.0–1.0
         self.last_error: Optional[str] = None
         self.inference_fps = 0.0
+        self.inference_ms = 0.0
+        self.loop_fps = 0.0
         self.face_count = 0
         self.admin_mode = False
 
@@ -996,7 +1019,11 @@ class GestureEngine:
         self.ready = False
         self.thread: Optional[threading.Thread] = None
         self.running = False
-        self._fps_times = deque(maxlen=20)
+        self._fps_times = deque(maxlen=30)
+        self._last_frame_seq: int = -1
+        self._face_skip_counter: int = 0
+        self._last_primary_face = None
+        self._last_face_count: int = 0
 
     def init(self):
         if not MEDIAPIPE_OK:
@@ -1067,8 +1094,6 @@ class GestureEngine:
         self.running = False
 
     def _run(self):
-        skip = 2
-        counter = 0
         while self.running:
             if not camera.is_ok:
                 with gesture_lock:
@@ -1078,16 +1103,21 @@ class GestureEngine:
                     gesture_state.fist_start = None
                     gesture_state.peace_start = None
                     gesture_state.peace_progress = 0.0
-                time.sleep(0.08)
+                time.sleep(0.05)
                 continue
+
             frame = camera.get_frame()
             if frame is None:
-                time.sleep(0.04)
+                time.sleep(0.005)
                 continue
-            counter += 1
-            if counter % skip != 0:
-                time.sleep(0.01)
+
+            # Only process the latest frame; skip immediately if it is stale.
+            with camera.frame_lock:
+                seq = camera.frame_sequence
+            if seq == self._last_frame_seq:
+                time.sleep(0.001)
                 continue
+            self._last_frame_seq = seq
 
             t0 = time.perf_counter()
             try:
@@ -1102,31 +1132,49 @@ class GestureEngine:
                     print(f"[GESTURE ERROR] {err}")
 
             t1 = time.perf_counter()
+            infer_ms = (t1 - t0) * 1000.0
             self._fps_times.append(t1)
             if len(self._fps_times) >= 2:
                 with gesture_lock:
-                    gesture_state.inference_fps = (len(self._fps_times) - 1) / (self._fps_times[-1] - self._fps_times[0])
+                    fps = (len(self._fps_times) - 1) / (self._fps_times[-1] - self._fps_times[0])
+                    gesture_state.inference_fps = fps
+                    gesture_state.inference_ms = infer_ms
+                    gesture_state.loop_fps = fps
 
-            time.sleep(0.01)
+            # No fixed sleep: loop throttles naturally via inference cost + latest-frame gate.
+            time.sleep(0.001)
 
     def _process_frame(self, frame: np.ndarray):
         h, w = frame.shape[:2]
-        det_w, det_h = 320, 180
-        small = cv2.resize(frame, (det_w, det_h))
+        det_w = int(config["inference_width"])
+        det_h = int(config["inference_height"])
+
+        # Single downscale for ALL inference (hand + face). Preview stays full-res.
+        if (w, h) != (det_w, det_h):
+            small = cv2.resize(frame, (det_w, det_h), interpolation=cv2.INTER_AREA)
+        else:
+            small = frame
         rgb_small = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
-        rgb_full = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
         mp_image_small = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_small)
-        mp_image_full = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_full)
 
-        primary_face = None
-        face_count = 0
-        if self.face_detector:
+        # Face detection is throttled (every N frames) and last result reused.
+        primary_face = self._last_primary_face
+        face_count = self._last_face_count
+        self._face_skip_counter += 1
+        face_interval = max(1, int(config["gesture_face_interval"]))
+        if self.face_detector and self._face_skip_counter % face_interval == 0:
             try:
                 face_result = self.face_detector.detect(mp_image_small)
                 if face_result and face_result.detections:
                     face_count = len(face_result.detections)
+                    self._last_face_count = face_count
                     primary_face = self._score_primary_face(face_result.detections, det_w, det_h)
+                    self._last_primary_face = primary_face
+                else:
+                    face_count = 0
+                    self._last_face_count = 0
+                    primary_face = None
+                    self._last_primary_face = None
             except Exception as e:
                 with gesture_lock:
                     gesture_state.last_error = f"Face detection error: {e}"
@@ -1134,7 +1182,7 @@ class GestureEngine:
         hand_result = None
         if self.hand_landmarker:
             try:
-                hand_result = self.hand_landmarker.detect(mp_image_full)
+                hand_result = self.hand_landmarker.detect(mp_image_small)
             except Exception as e:
                 with gesture_lock:
                     gesture_state.last_error = f"Hand detection error: {e}"
@@ -1595,7 +1643,8 @@ class MidtransPaymentProvider(PaymentProvider):
             return False
 
 def get_payment_provider() -> PaymentProvider:
-    if config["demo_mode"]:
+    mode = config.get("payment_mode", "manual")
+    if mode == "demo":
         return DemoPaymentProvider()
     return MidtransPaymentProvider()
 
@@ -1695,39 +1744,77 @@ class FrameManager:
     def __init__(self):
         self.frames: Dict[str, Dict] = {}
         self.preset = FRAME_PRESETS["default_3slot"]
+        self._thumb_cache: Dict[str, Optional[bytes]] = {}
+
+    def get_thumbnail_bytes(self, fname: str) -> Optional[bytes]:
+        """Cached thumbnail. Returns PNG bytes or None. Never crashes on bad files."""
+        if fname in self._thumb_cache:
+            return self._thumb_cache[fname]
+        frame = self.frames.get(fname)
+        if not frame:
+            return None
+        try:
+            with Image.open(frame["path"]) as img:
+                thumb = img.copy()
+                thumb.thumbnail((120, 260), Image.Resampling.LANCZOS)
+                buf = io.BytesIO()
+                thumb.save(buf, format="PNG")
+            data = buf.getvalue()
+        except Exception as e:
+            print(f"[FRAME SKIP] Thumbnail failed for {fname}: {e}")
+            data = None
+        self._thumb_cache[fname] = data
+        return data
+
+    def clear_thumb_cache(self):
+        self._thumb_cache.clear()
 
     def scan(self):
         self.frames.clear()
-        pngs = glob.glob(str(FRAMES_DIR / "*.png"))
-        for p in pngs:
-            fname = os.path.basename(p)
+        self.clear_thumb_cache()
+        try:
+            entries = os.listdir(FRAMES_DIR)
+        except OSError as e:
+            print(f"[FRAME ERROR] Cannot read frames dir: {e}")
+            return
+        for fname in sorted(entries):
+            if not fname.lower().endswith(".png"):
+                continue
+            p = str(FRAMES_DIR / fname)
             try:
+                # Validate image integrity without crashing on corrupt files.
+                with Image.open(p) as probe:
+                    probe.verify()
                 with Image.open(p) as img:
                     w, h = img.size
-                    has_alpha = (img.mode == "RGBA")
-                    # Generate small thumbnail
-                    thumb = img.copy()
-                    thumb.thumbnail((120, 260), Image.Resampling.LANCZOS)
-                    buf = io.BytesIO()
-                    thumb.save(buf, format="PNG")
-                    t_b64 = base64.b64encode(buf.getvalue()).decode()
+                    has_alpha = (img.mode == "RGBA") or ("A" in img.mode)
 
                     self.frames[fname] = {
                         "filename": fname,
                         "label": Path(fname).stem.replace("_", " ").title(),
-                        "path": p,
+                        "path": p,  # kept internally for compositing only
                         "width": w,
                         "height": h,
                         "has_alpha": has_alpha,
-                        "thumb_b64": t_b64,
                         "slot_count": 3,
                     }
                     print(f"[FRAME] Loaded frame: {fname} ({w}x{h}, alpha={has_alpha})")
             except Exception as e:
-                print(f"[FRAME ERROR] Loading {fname}: {e}")
+                print(f"[FRAME SKIP] {fname} invalid/corrupt: {e}")
 
     def get_frame_list(self) -> List[Dict]:
-        return list(self.frames.values())
+        # Never expose absolute filesystem paths to the frontend.
+        out = []
+        for f in self.frames.values():
+            out.append({
+                "filename": f["filename"],
+                "label": f["label"],
+                "width": f["width"],
+                "height": f["height"],
+                "has_alpha": f["has_alpha"],
+                "slot_count": f["slot_count"],
+            })
+        return out
 
     def get_frame(self, filename: str) -> Optional[Dict]:
         return self.frames.get(filename)
@@ -1875,6 +1962,19 @@ class SessionController:
             amount = config["photobooth_price"]
             session.payment_amount = amount
 
+        mode = config.get("payment_mode", "manual")
+        if mode == "manual":
+            # Manual QRIS: no gateway, no internet, no polling. Operator confirms with F9 x3.
+            with session_lock:
+                if session.payment_order_id == order_id:
+                    session.payment_state = "pending"
+                    session.payment_transaction_id = None
+                    session.payment_qr_data = None
+                    session.payment_expiry = None
+                    print(f"[PAYMENT] Manual QRIS pending: {order_id} / Rp{amount:,} (confirm via F9 x3)")
+            return
+
+        # Legacy paths (demo / midtrans): create provider payment + start polling.
         threading.Thread(target=self._init_payment, args=(order_id, amount), daemon=True).start()
 
     def _init_payment(self, order_id: str, amount: int):
@@ -1966,8 +2066,17 @@ class SessionController:
 
     def print_photo(self):
         self.transition(SessionState.PRINTING)
-        session.print_state = "printing"
+        with session_lock:
+            session.print_state = "printing"
+            session.print_started_mono = time.monotonic()
         threading.Thread(target=self._do_print, daemon=True).start()
+
+    def cancel_print(self):
+        """Emergency escape from a stuck printer. Does not touch final image/QR/session."""
+        with session_lock:
+            session.print_state = "cancelled"
+            # Keep print_started_mono so elapsed keeps displaying; state drives UI.
+        self.transition(SessionState.QR)
 
     def _do_print(self):
         with session_lock:
@@ -1979,6 +2088,14 @@ class SessionController:
         ok, msg = printer_manager.print_image(fpath)
         with session_lock:
             session.print_state = "success" if ok else "failed"
+        if ok:
+            # Print completed normally (< fallback window) -> proceed to success.
+            time.sleep(1.2)
+            with session_lock:
+                if session.state == SessionState.PRINTING:
+                    self.go_success()
+        else:
+            print(f"[PRINT ERROR] {msg}")
 
     def go_success(self):
         self.transition(SessionState.SUCCESS)
@@ -2144,6 +2261,30 @@ def video_feed():
         mimetype="multipart/x-mixed-replace; boundary=frame"
     )
 
+@app.route("/api/cursor")
+def api_cursor():
+    """Lightweight fast-poll endpoint for cursor/gesture so the frontend can move
+    the virtual cursor smoothly without waiting for the (heavier) /api/state."""
+    with gesture_lock:
+        return jsonify({
+            "cursor_x": gesture_state.cursor_x,
+            "cursor_y": gesture_state.cursor_y,
+            "gesture": gesture_state.current_gesture,
+            "hand_detected": gesture_state.hand_detected,
+            "hand_valid_for_primary": gesture_state.hand_valid_for_primary,
+            "primary_user_locked": gesture_state.primary_user_locked,
+            "fist_stable_ms": (
+                int((time.time() - gesture_state.fist_start) * 1000)
+                if gesture_state.fist_start else 0
+            ),
+            "peace_progress": gesture_state.peace_progress,
+            "last_click_age_ms": int((time.time() - gesture_state.last_click_time) * 1000),
+            "inference_fps": round(gesture_state.inference_fps, 1),
+            "inference_ms": round(gesture_state.inference_ms, 1),
+            "face_count": gesture_state.face_count,
+            "camera_fps": round(camera.fps, 1) if camera.is_ok else 0.0,
+        })
+
 @app.route("/api/state")
 def api_state():
     with session_lock:
@@ -2167,6 +2308,7 @@ def api_state():
             "frame_guidance": gesture_state.frame_guidance,
             "last_gesture_error": gesture_state.last_error,
             "inference_fps": round(gesture_state.inference_fps, 1),
+            "inference_ms": round(gesture_state.inference_ms, 1),
             "admin_mode": gesture_state.admin_mode,
         }
     cam = {
@@ -2203,6 +2345,7 @@ def api_state():
             "amount": payment_amount,
             "expiry": payment_expiry,
             "has_qr": bool(payment_qr),
+            "mode": config.get("payment_mode", "manual"),
         },
         "debug": {
             "show_fps": config["show_fps"],
@@ -2411,6 +2554,12 @@ def api_action():
             ctrl.print_photo()
             return jsonify({"ok": True})
 
+    elif action == "back_from_print":
+        if session.state == SessionState.PRINTING:
+            ctrl.cancel_print()
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Not printing"})
+
     elif action == "skip_print":
         if session.state in (SessionState.QR, SessionState.PRINTING):
             ctrl.go_success()
@@ -2444,7 +2593,8 @@ def api_action():
         return jsonify({"ok": False})
 
     elif action == "simulate_payment_success":
-        if config["demo_mode"]:
+        mode = config.get("payment_mode", "manual")
+        if mode == "demo":
             with session_lock:
                 oid = session.payment_order_id
             if oid:
@@ -2452,7 +2602,25 @@ def api_action():
                 return jsonify({"ok": True})
         return jsonify({"ok": False, "error": "Not in demo mode"})
 
+    elif action == "confirm_manual_payment":
+        if session.state == SessionState.PAYMENT:
+            with session_lock:
+                session.payment_state = "success"
+                session.payment_expiry = None
+                print(f"[PAYMENT] Manual QRIS confirmed by operator: {session.session_id}")
+            ctrl.stop_payment_poll()
+            ctrl.transition(SessionState.FRAMES)
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Not in payment state"})
+
     return jsonify({"ok": False, "error": f"Unknown action: {action}"})
+
+@app.route("/api/qris_image")
+def api_qris_image():
+    qris_path = ASSETS_DIR / "qris.png"
+    if not qris_path.exists():
+        return jsonify({"ok": False, "error": "QRIS image not found"}), 404
+    return send_file(str(qris_path), mimetype="image/png")
 
 @app.route("/api/payment_qr")
 def api_payment_qr():
@@ -2460,6 +2628,16 @@ def api_payment_qr():
         qr_data = session.payment_qr_data
         amount = session.payment_amount
         order_id = session.payment_order_id
+    mode = config.get("payment_mode", "manual")
+    if mode == "manual":
+        # Manual QRIS: static asset. Frontend loads /api/qris_image directly.
+        return jsonify({
+            "ok": True,
+            "mode": "manual",
+            "qr_image_url": "/api/qris_image",
+            "amount": amount,
+            "order_id": order_id,
+        })
     if not qr_data:
         return jsonify({"ok": False})
     qr_b64 = make_qr_b64(qr_data, size=400)
@@ -2560,8 +2738,13 @@ def api_frame_thumb(filename: str):
     frame = frame_manager.get_frame(safe)
     if not frame:
         abort(404)
-    img_data = base64.b64decode(frame["thumb_b64"])
-    return Response(img_data, mimetype="image/png")
+    try:
+        data = frame_manager.get_thumbnail_bytes(safe)
+        if data is None:
+            abort(404)
+        return Response(data, mimetype="image/png")
+    except Exception:
+        abort(404)
 
 @app.route("/payment/webhook", methods=["POST"])
 def payment_webhook():
@@ -3576,7 +3759,10 @@ body.dark-mode #gesture-hud {
       </div>
       <div class="payment-status-badge" id="payment-status-text">Preparing your payment...</div>
       <div style="font-size: var(--text-xs); color: var(--col-text-3);" id="payment-timer"></div>
-      
+      <div id="payment-manual-hint" style="display:none; font-size: var(--text-xs); color: var(--col-text-3); text-align:center; border-top:1px solid var(--col-border); padding-top:14px;">
+        Operator: tekan <b>F9 sebanyak 3x</b> setelah pembayaran selesai untuk mengonfirmasi.
+      </div>
+
       <div style="display: flex; gap: 12px; margin-top: 8px;" id="demo-payment-row">
         <button class="btn btn-ghost btn-interactive" onclick="simulatePayment()">⚡ Simulate Payment (Demo)</button>
         <button class="btn btn-ghost btn-interactive" id="btn-retry-payment" style="display:none;" onclick="retryPayment()">Retry</button>
@@ -3624,6 +3810,12 @@ body.dark-mode #gesture-hud {
     <div class="spinner"></div>
     <h2 style="font-size: var(--text-xl); font-weight: 800;" id="printing-title">Printing Your Photo...</h2>
     <p style="color: var(--col-text-2);" id="printing-status">Please wait while the printer prepares your photo.</p>
+    <div style="font-size: var(--text-xs); color: var(--col-text-3); margin-top: 8px;" id="printing-elapsed"></div>
+    <div id="print-fallback" style="display:none; margin-top: 28px; align-items:center; gap:16px; flex-direction:row;">
+      <button class="btn btn-ghost btn-interactive" style="background:rgba(107,109,118,0.15); color:var(--col-text-2); border-color:rgba(107,109,118,0.4);" onclick="doAction('back_from_print')">← Back</button>
+      <button class="btn btn-ghost btn-interactive" style="background:rgba(107,109,118,0.15); color:var(--col-text-2); border-color:rgba(107,109,118,0.4);" onclick="doAction('skip_print')">Next →</button>
+    </div>
+    <div style="font-size: var(--text-xs); color: var(--col-text-3); margin-top: 12px;" id="print-fallback-hint"></div>
   </div>
 
   <!-- SUCCESS SCREEN -->
@@ -3837,6 +4029,24 @@ body.dark-mode #gesture-hud {
               <div class="settings-label">Grace Period (ms)</div>
               <div class="settings-control"><input type="number" id="cfg-primary_user_grace_ms" min="500" max="10000"></div>
             </div>
+          <div class="settings-group">
+            <div class="settings-group-title">Gesture Performance</div>
+            <div class="settings-row">
+              <div class="settings-label">Inference Width (px)</div>
+              <div class="settings-control"><input type="number" id="cfg-inference_width" min="160" max="1280" step="16"></div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Inference Height (px)</div>
+              <div class="settings-control"><input type="number" id="cfg-inference_height" min="90" max="720" step="16"></div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Face Detect Interval (frames)</div>
+              <div class="settings-control"><input type="number" id="cfg-gesture_face_interval" min="1" max="10" step="1"></div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Print Fallback Escape (sec)</div>
+              <div class="settings-control"><input type="number" id="cfg-print_fallback_sec" min="10" max="600"></div>
+            </div>
           </div>
         </div>
 
@@ -3889,6 +4099,16 @@ body.dark-mode #gesture-hud {
         <div class="settings-section" id="settings-payment">
           <div class="settings-group">
             <div class="settings-group-title">Payment Mode</div>
+            <div class="settings-row">
+              <div class="settings-label">Payment Mode (manual = QRIS + F9 konfirmasi)</div>
+              <div class="settings-control">
+                <select id="cfg-payment_mode">
+                  <option value="manual">Manual QRIS (default)</option>
+                  <option value="demo">Demo (simulate)</option>
+                  <option value="midtrans">Midtrans (legacy gateway)</option>
+                </select>
+              </div>
+            </div>
             <div class="settings-row">
               <div class="settings-label">Demo Mode</div>
               <div class="settings-control"><div class="settings-toggle" id="cfg-demo_mode" onclick="toggleSetting(this)"></div></div>
@@ -3963,10 +4183,15 @@ let appState = {
   peaceProgress: 0,
   fistStableMs: 0,
   lastClickAgeMs: 9999,
+  inferenceFps: 0,
+  inferenceMs: 0,
+  cameraFps: 0,
+  faceCount: 0,
   config: {},
   frames: [],
   selectedFrame: null,
   paymentState: 'idle',
+  paymentMode: 'manual',
   paymentAmount: 0,
   paymentExpiry: null,
   photoCount: 0,
@@ -3980,11 +4205,13 @@ let appState = {
 };
 
 let pollInterval = null;
+let cursorPollInterval = null;
 let paymentTimerInterval = null;
 let successTimerInterval = null;
 let qrLoaded = false;
 let framePreviewsLoaded = {};
 const POLL_MS = 350;
+const CURSOR_POLL_MS = 50;
 
 // Gesture action latches
 let fistArmed = true;
@@ -3995,6 +4222,7 @@ let countdownRunning = false;
 document.addEventListener('DOMContentLoaded', () => {
   showScreen('landing');
   startPolling();
+  startCursorPolling();
   setupKeyboard();
   requestAnimationFrame(renderLoop);
   loadFrameData();
@@ -4003,6 +4231,48 @@ document.addEventListener('DOMContentLoaded', () => {
 function startPolling() {
   if (pollInterval) clearInterval(pollInterval);
   pollInterval = setInterval(fetchState, POLL_MS);
+}
+
+function startCursorPolling() {
+  if (cursorPollInterval) clearInterval(cursorPollInterval);
+  cursorPollInterval = setInterval(fetchCursor, CURSOR_POLL_MS);
+}
+
+async function fetchCursor() {
+  try {
+    const res = await fetch('/api/cursor');
+    if (!res.ok) return;
+    const d = await res.json();
+    appState.cursor = { x: d.cursor_x, y: d.cursor_y };
+    appState.gesture = d.gesture;
+    appState.handDetected = d.hand_detected;
+    appState.primaryUserLocked = d.primary_user_locked;
+    appState.peaceProgress = d.peace_progress;
+    appState.fistStableMs = d.fist_stable_ms;
+    appState.lastClickAgeMs = d.last_click_age_ms || 9999;
+    appState.inferenceFps = d.inference_fps;
+    appState.inferenceMs = d.inference_ms;
+    appState.cameraFps = d.camera_fps;
+    updateGestureHUD();
+    updateDebugOverlay();
+  } catch (e) {}
+}
+
+function updateDebugOverlay() {
+  const ov = document.getElementById('gesture-debug-overlay');
+  if (!ov) return;
+  ov.classList.toggle('visible', !!appState.config.show_gesture_label);
+  const set = (id, val, cls) => {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = val; el.className = 'gd-val' + (cls ? ' ' + cls : ''); }
+  };
+  set('gdo-hand', appState.handDetected ? 'YES' : 'NO', appState.handDetected ? 'ok' : '');
+  set('gdo-primary', appState.primaryUserLocked ? 'LOCK' : 'NO', appState.primaryUserLocked ? 'ok' : '');
+  set('gdo-face', appState.faceCount ?? 0);
+  set('gdo-gesture', (appState.gesture || 'none').toUpperCase());
+  set('gdo-cursor', `${(appState.cursor.x*100).toFixed(0)},${(appState.cursor.y*100).toFixed(0)}`);
+  set('gdo-fps', `${appState.inferenceFps ?? '-'} fps / ${appState.inferenceMs ?? '-'}ms`);
+  set('gdo-cam', `${appState.cameraFps ?? '-'} fps`);
 }
 
 async function fetchState() {
@@ -4030,11 +4300,16 @@ function updateState(data) {
   appState.lastClickAgeMs = g.last_click_age_ms || 9999;
   appState.guidance = g.frame_guidance || '';
   appState.adminMode = g.admin_mode || settingsOpen;
+  appState.faceCount = g.face_count || 0;
+  appState.inferenceFps = g.inference_fps || 0;
+  appState.inferenceMs = g.inference_ms || 0;
+  appState.cameraFps = cam.actual_fps || 0;
 
   appState.photoCount = s.photo_slots_filled;
   appState.paymentState = s.payment_state;
   appState.paymentAmount = data.payment.amount;
   appState.paymentExpiry = data.payment.expiry;
+  appState.paymentMode = data.payment.mode || 'manual';
   appState.hasFinal = data.has_final;
   appState.sessionId = data.final_session_id;
   appState.printState = s.print_state;
@@ -4080,7 +4355,7 @@ function updateDiagnosticsView(cam, g) {
   const hAssoc = document.getElementById('diag-hand-assoc');
   if (hAssoc) hAssoc.textContent = g.hand_valid_for_primary ? 'VALID' : (g.hand_detected ? 'REJECTED' : '-');
   const infFps = document.getElementById('diag-inference-fps');
-  if (infFps) infFps.textContent = `${g.inference_fps} FPS`;
+  if (infFps) infFps.textContent = `${g.inference_fps} FPS / ${g.inference_ms || 0} ms`;
   const lErr = document.getElementById('diag-last-err');
   if (lErr) lErr.textContent = g.last_gesture_error || 'None';
 }
@@ -4100,6 +4375,7 @@ function transitionToScreen(name) {
   if (!target) return;
   target.classList.add('active');
 
+  if (appState.screen === 'payment' && name !== 'payment') resetF9();
   if (name === 'qr' && !qrLoaded) loadFinalQR();
   if (name === 'payment') initPaymentScreen();
   if (name === 'success') startSuccessCountdown();
@@ -4133,6 +4409,31 @@ function updateScreenContent(s, data) {
   }
 
   if (appState.screen === 'payment') updatePaymentUI(data);
+
+  if (appState.screen === 'printing') updatePrintingUI(s);
+}
+
+function updatePrintingUI(s) {
+  const title = document.getElementById('printing-title');
+  const status = document.getElementById('printing-status');
+  const elapsedEl = document.getElementById('printing-elapsed');
+  const fallback = document.getElementById('print-fallback');
+  const hint = document.getElementById('print-fallback-hint');
+  const elapsed = s.print_elapsed_sec || 0;
+  const fallbackSec = s.print_fallback_sec || 60;
+
+  if (title) title.textContent = 'Printing Your Photo...';
+  if (status) {
+    if (appState.printState === 'failed') status.textContent = 'Printing encountered an issue. You can retry from Back.';
+    else if (appState.printState === 'success') status.textContent = 'Print completed.';
+    else status.textContent = 'Please wait while the printer prepares your photo.';
+  }
+  if (elapsedEl) elapsedEl.textContent = elapsed >= 1 ? `Elapsed: ${Math.floor(elapsed)}s` : '';
+
+  // Fallback escape: show once >= PRINT_FALLBACK_SEC or when printing failed.
+  const showFallback = (elapsed >= fallbackSec) || appState.printState === 'failed';
+  if (fallback) fallback.style.display = showFallback ? 'flex' : 'none';
+  if (hint) hint.textContent = showFallback ? 'Printer terlalu lama? Gunakan Back untuk kembali, atau Next untuk lanjut ke layar selesai.' : '';
 }
 
 function updateCameraDots(filled) {
@@ -4167,12 +4468,20 @@ function updatePaymentUI(data) {
   const statusEl = document.getElementById('payment-status-text');
   const spinnerEl = document.getElementById('payment-spinner');
   const qrImg = document.getElementById('payment-qr-img');
+  const manualHint = document.getElementById('payment-manual-hint');
+  const demoRow = document.getElementById('demo-payment-row');
   const state = appState.paymentState;
+  const mode = appState.paymentMode;
+  const isManual = mode === 'manual';
+
+  // Manual QRIS: show operator hint, hide demo simulate button.
+  if (manualHint) manualHint.style.display = isManual ? 'block' : 'none';
+  if (demoRow) demoRow.style.display = (mode === 'demo') ? 'flex' : 'none';
 
   if (state === 'pending') {
-    if (statusEl) statusEl.textContent = 'Scan QRIS to Pay';
+    if (statusEl) statusEl.textContent = isManual ? 'Scan QRIS & Bayar — Operator konfirmasi via F9 ×3' : 'Scan QRIS to Pay';
     if (spinnerEl) spinnerEl.style.display = 'none';
-    if (qrImg && !qrImg.src.startsWith('data:')) loadPaymentQR();
+    if (qrImg && !qrImg.src.startsWith('data:') && !qrImg.src.includes('/api/qris_image')) loadPaymentQR();
     if (appState.paymentExpiry && !paymentTimerInterval) {
       paymentTimerInterval = setInterval(updatePaymentTimer, 1000);
     }
@@ -4186,8 +4495,11 @@ async function loadPaymentQR() {
   try {
     const res = await fetch('/api/payment_qr');
     const data = await res.json();
-    if (data.ok && data.qr_b64) {
-      const img = document.getElementById('payment-qr-img');
+    const img = document.getElementById('payment-qr-img');
+    if (!img) return;
+    if (data.mode === 'manual') {
+      img.src = '/api/qris_image';
+    } else if (data.ok && data.qr_b64) {
       img.src = 'data:image/png;base64,' + data.qr_b64;
     }
   } catch(e) {}
@@ -4336,6 +4648,13 @@ function resetGestureLatches() {
   clearGestureUI();
 }
 
+function updateGestureHUD() {
+  const g = appState.gesture;
+  document.getElementById('gest-palm').classList.toggle('active', g === 'palm');
+  document.getElementById('gest-fist').classList.toggle('active', g === 'fist');
+  document.getElementById('gest-peace').classList.toggle('active', g === 'peace');
+}
+
 function processGestures(cfg) {
   // If settings modal is open (admin mode), disable booth gesture actions
   if (appState.adminMode || settingsOpen) {
@@ -4354,9 +4673,7 @@ function processGestures(cfg) {
   const now = Date.now();
 
   // Update HUD
-  document.getElementById('gest-palm').classList.toggle('active', g === 'palm');
-  document.getElementById('gest-fist').classList.toggle('active', g === 'fist');
-  document.getElementById('gest-peace').classList.toggle('active', g === 'peace');
+  updateGestureHUD();
 
   // Peace progress ring
   const ringOverlay = document.getElementById('peace-ring-overlay');
@@ -4536,11 +4853,45 @@ function renderLoop() {
 let settingsOpen = false;
 let keyboardInitialized = false;
 
+// F9 triple-press confirmation (manual QRIS). 3 separate keydowns within 2s.
+let f9Presses = [];
+let f9ResetTimer = null;
+const F9_WINDOW_MS = 2000;
+const F9_REQUIRED = 3;
+
+function resetF9() {
+  f9Presses = [];
+  if (f9ResetTimer) { clearTimeout(f9ResetTimer); f9ResetTimer = null; }
+}
+
 function setupKeyboard() {
   if (keyboardInitialized) return;
   keyboardInitialized = true;
 
   window.addEventListener('keydown', (e) => {
+    if (e.key === 'F9' || e.code === 'F9' || e.keyCode === 120) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // F9 only active during payment state.
+      if (appState.screen !== 'payment' || appState.paymentState !== 'pending') {
+        resetF9();
+        return false;
+      }
+
+      const now = Date.now();
+      f9Presses = f9Presses.filter(t => now - t <= F9_WINDOW_MS);
+      f9Presses.push(now);
+      if (f9ResetTimer) { clearTimeout(f9ResetTimer); f9ResetTimer = null; }
+      f9ResetTimer = setTimeout(resetF9, F9_WINDOW_MS);
+
+      if (f9Presses.length >= F9_REQUIRED) {
+        resetF9();
+        showToast('Payment confirmed (F9 ×3)');
+        doAction('confirm_manual_payment');
+      }
+      return false;
+    }
     if (e.key === 'F10' || e.code === 'F10' || e.keyCode === 121) {
       e.preventDefault();
       e.stopPropagation();
@@ -4789,6 +5140,11 @@ async function settingsAction(action) {
   } else if (action === 'reset_session') {
     showToast('Session reset');
     closeSettings();
+  } else if (action === 'reload_frames') {
+    appState.frames = [];
+    showToast('Frames refreshed');
+    await fetchState();
+    renderFrameCards();
   } else {
     showToast('Action executed');
   }
@@ -4819,6 +5175,20 @@ def ensure_directories():
     if dummy_src.exists() and not dummy_dst.exists():
         shutil.copy2(str(dummy_src), str(dummy_dst))
         print("[FRAME] Copied dummyframe.png to frames/")
+    qris_path = ASSETS_DIR / "qris.png"
+    if not qris_path.exists():
+        try:
+            qr = qrcode.QRCode(version=None,
+                               error_correction=qrcode.constants.ERROR_CORRECT_M,
+                               box_size=10, border=4)
+            qr.add_data(f"RENCANA-TUHAN-STUDIO-MANUAL-QRIS:{uuid.uuid4().hex[:6]}")
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            img = img.resize((600, 600), Image.NEAREST)
+            img.save(str(qris_path))
+            print(f"[ASSET] Generated placeholder QRIS at {qris_path}")
+        except Exception as e:
+            print(f"[ASSET] Could not generate QRIS placeholder: {e}")
 
 def startup():
     print("=" * 64)
