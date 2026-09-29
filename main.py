@@ -341,6 +341,7 @@ class AppSession:
         self.selected_frame: Optional[str] = None
         self.final_image_path: Optional[str] = None
         self.cloud_download_url: Optional[str] = None
+        self.retake_slot_target: Optional[int] = None # 1, 2, or 3 if single-slot retake in progress
         self.payment_state: str = "idle"        # idle, creating, pending, success, failed, expired
         self.payment_order_id: Optional[str] = None
         self.payment_transaction_id: Optional[str] = None
@@ -362,6 +363,7 @@ class AppSession:
         self.selected_frame = None
         self.final_image_path = None
         self.cloud_download_url = None
+        self.retake_slot_target = None
         self.payment_state = "idle"
         self.payment_order_id = None
         self.payment_transaction_id = None
@@ -409,6 +411,7 @@ class AppSession:
             "countdown_active": self.countdown_active,
             "countdown_value": self.countdown_value,
             "photo_slots_filled": len(self.photos),
+            "retake_slot_target": self.retake_slot_target,
         }
 
 session = AppSession()
@@ -1972,6 +1975,14 @@ class SessionController:
     def start_camera(self):
         with session_lock:
             session.photos = []
+            session.retake_slot_target = None
+            session.countdown_active = False
+            session.countdown_value = 0
+        self.transition(SessionState.CAMERA)
+
+    def start_retake_slot(self, slot_idx: int):
+        with session_lock:
+            session.retake_slot_target = slot_idx
             session.countdown_active = False
             session.countdown_value = 0
         self.transition(SessionState.CAMERA)
@@ -1987,6 +1998,20 @@ class SessionController:
             return False
 
         with session_lock:
+            target_slot = session.retake_slot_target
+            if target_slot is not None and 1 <= target_slot <= 3:
+                filename = f"{session.session_id}_photo_{target_slot}.jpg"
+                path = str(PHOTOS_DIR / filename)
+                cv2.imwrite(path, frame, [cv2.IMWRITE_JPEG_QUALITY, config["photo_jpeg_quality"]])
+                idx0 = target_slot - 1
+                if idx0 < len(session.photos):
+                    session.photos[idx0] = path
+                else:
+                    session.photos.append(path)
+                session.touch()
+                print(f"[PHOTO] Retaken single slot #{target_slot}: {path}")
+                return True
+
             count = len(session.photos) + 1
             if count > 3:
                 return False
@@ -2587,15 +2612,30 @@ def api_action():
         if session.state == SessionState.CAMERA:
             ok = ctrl.capture_photo()
             with session_lock:
+                target_slot = session.retake_slot_target
                 count = len(session.photos)
-            if ok and count >= 3:
-                ctrl.transition(SessionState.REVIEW)
+            if ok:
+                if target_slot is not None:
+                    # Single photo retake completed: clear target and transition back to REVIEW!
+                    with session_lock:
+                        session.retake_slot_target = None
+                    ctrl.transition(SessionState.REVIEW)
+                elif count >= 3:
+                    ctrl.transition(SessionState.REVIEW)
             return jsonify({"ok": ok, "photo_count": count})
 
     elif action == "retake_all":
         if session.state == SessionState.REVIEW:
             ctrl.start_camera()
             return jsonify({"ok": True})
+
+    elif action == "retake_slot":
+        if session.state == SessionState.REVIEW:
+            slot = int(data.get("slot", 1))
+            if 1 <= slot <= 3:
+                ctrl.start_retake_slot(slot)
+                return jsonify({"ok": True, "slot": slot})
+            return jsonify({"ok": False, "error": "Invalid slot"})
 
     elif action == "use_photos":
         if session.state == SessionState.REVIEW:
@@ -3562,6 +3602,39 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   box-shadow: var(--shadow-md);
   aspect-ratio: 1543 / 1060;
   display: flex; align-items: center; justify-content: center;
+  position: relative;
+  cursor: pointer;
+  transition: transform var(--tr-fast), border-color var(--tr-fast), box-shadow var(--tr-fast);
+}
+
+.review-card:hover, .review-card.hovered {
+  transform: translateY(-6px) scale(1.02);
+  border-color: var(--col-yellow);
+  box-shadow: var(--shadow-yellow);
+}
+
+.review-card-hint {
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  background: rgba(17, 19, 24, 0.75);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--r-full);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  opacity: 0.9;
+  transition: opacity var(--tr-fast);
+}
+
+.review-card:hover .review-card-hint {
+  opacity: 1;
+  background: var(--col-blue-1);
 }
 
 .review-card img {
@@ -3572,6 +3645,108 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 .review-actions {
   display: flex; gap: 20px;
   margin-top: 16px;
+}
+
+/* PHOTO ZOOM POPUP MODAL */
+#photo-zoom-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 11, 15, 0.85);
+  backdrop-filter: blur(10px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+  animation: fadeInModal 0.2s ease-out;
+}
+
+#photo-zoom-modal.active {
+  display: flex;
+}
+
+@keyframes fadeInModal {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.photo-zoom-content {
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-xl);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+  max-width: 820px;
+  width: 90vw;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.photo-zoom-header {
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--col-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--col-surface-2);
+}
+
+.photo-zoom-header-title {
+  font-size: var(--text-lg);
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.photo-zoom-close-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--col-border);
+  background: var(--col-surface);
+  color: var(--col-text);
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--tr-fast);
+}
+
+.photo-zoom-close-btn:hover {
+  background: var(--col-border);
+  transform: rotate(90deg);
+}
+
+.photo-zoom-body {
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0b0c10;
+  overflow: hidden;
+}
+
+.photo-zoom-body img {
+  max-width: 100%;
+  max-height: 58vh;
+  object-fit: contain;
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.photo-zoom-footer {
+  padding: 18px 24px;
+  border-top: 1px solid var(--col-border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--col-surface-2);
+  gap: 16px;
 }
 
 /* PAYMENT SCREEN */
@@ -4545,14 +4720,46 @@ body.dark-mode .settings-footer .btn-ghost:hover {
   <div class="screen" id="screen-review">
     <div class="brand-badge">Photo Review</div>
     <h2 style="font-size: var(--text-2xl); font-weight: 800;">Review Your Photos</h2>
+    <p style="font-size: var(--text-sm); color: var(--col-text-2); margin-top: -12px;">Klik pada foto untuk melihat lebih jelas (zoom) atau mengulang foto tersebut.</p>
     <div class="review-grid">
-      <div class="review-card"><img id="rev-photo-1" src="" alt="Photo 1"></div>
-      <div class="review-card"><img id="rev-photo-2" src="" alt="Photo 2"></div>
-      <div class="review-card"><img id="rev-photo-3" src="" alt="Photo 3"></div>
+      <div class="review-card btn-interactive" onclick="openPhotoZoom(1)">
+        <img id="rev-photo-1" src="" alt="Photo 1">
+        <div class="review-card-hint">🔍 Zoom / Retake</div>
+      </div>
+      <div class="review-card btn-interactive" onclick="openPhotoZoom(2)">
+        <img id="rev-photo-2" src="" alt="Photo 2">
+        <div class="review-card-hint">🔍 Zoom / Retake</div>
+      </div>
+      <div class="review-card btn-interactive" onclick="openPhotoZoom(3)">
+        <img id="rev-photo-3" src="" alt="Photo 3">
+        <div class="review-card-hint">🔍 Zoom / Retake</div>
+      </div>
     </div>
     <div class="review-actions">
       <button class="btn btn-ghost btn-interactive" onclick="doAction('retake_all')">↺ Retake All</button>
       <button class="btn btn-primary btn-interactive" onclick="doAction('use_photos')">Continue to Payment →</button>
+    </div>
+  </div>
+
+  <!-- PHOTO ZOOM & RETAKE MODAL -->
+  <div id="photo-zoom-modal" onclick="onZoomModalBgClick(event)">
+    <div class="photo-zoom-content" onclick="event.stopPropagation()">
+      <div class="photo-zoom-header">
+        <div class="photo-zoom-header-title">
+          <span>🔍</span>
+          <span id="photo-zoom-title">Foto 01</span>
+        </div>
+        <button class="photo-zoom-close-btn btn-interactive" onclick="closePhotoZoom()">✕</button>
+      </div>
+      <div class="photo-zoom-body">
+        <img id="photo-zoom-img" src="" alt="Zoomed Photo">
+      </div>
+      <div class="photo-zoom-footer">
+        <button class="btn btn-secondary btn-interactive" id="btn-retake-single" onclick="retakeCurrentZoomedPhoto()">
+          ↺ Retake Foto Ini Saja
+        </button>
+        <button class="btn btn-ghost btn-interactive" onclick="closePhotoZoom()">Tutup</button>
+      </div>
     </div>
   </div>
 
@@ -5389,12 +5596,25 @@ function transitionToScreen(name) {
     framePreviewsLoaded = {};
     loadFramePreviews();
   }
+  if (name === 'review') {
+    closePhotoZoom();
+    for (let i = 1; i <= 3; i++) {
+      const el = document.getElementById(`rev-photo-${i}`);
+      if (el) el.src = `/api/photo_preview/${i}?t=${Date.now()}`;
+    }
+  }
 }
 
 function updateScreenContent(s, data) {
   if (appState.screen === 'camera') {
-    updateCameraDots(s.photo_slots_filled);
-    updatePhotoLabel(s.photo_slots_filled + 1);
+    const retakeSlot = s.retake_slot_target;
+    if (retakeSlot) {
+      updatePhotoLabelText(`RETAKE PHOTO 0${retakeSlot}`);
+      updateCameraDotsForRetake(retakeSlot);
+    } else {
+      updateCameraDots(s.photo_slots_filled);
+      updatePhotoLabel(s.photo_slots_filled + 1);
+    }
     updateGuidance(appState.guidance);
     const camErr = document.getElementById('camera-error');
     if (!appState.cameraOk) {
@@ -5455,6 +5675,21 @@ function updateCameraDots(filled) {
 function updatePhotoLabel(next) {
   const el = document.getElementById('photo-num-label');
   if (el) el.textContent = `PHOTO 0${Math.min(next, 3)} / 03`;
+}
+
+function updatePhotoLabelText(text) {
+  const el = document.getElementById('photo-num-label');
+  if (el) el.textContent = text;
+}
+
+function updateCameraDotsForRetake(targetSlot) {
+  for (let i = 1; i <= 3; i++) {
+    const dot = document.getElementById(`dot-${i}`);
+    if (!dot) continue;
+    dot.className = 'photo-dot';
+    if (i === targetSlot) dot.classList.add('current');
+    else dot.classList.add('done');
+  }
 }
 
 function updateGuidance(text) {
@@ -5643,6 +5878,44 @@ function startSuccessCountdown() {
   };
   update();
   successTimerInterval = setInterval(update, 1000);
+}
+
+// ============================================================
+// PHOTO ZOOM & SINGLE RETAKE POPUP
+// ============================================================
+let currentZoomedSlot = 1;
+
+function openPhotoZoom(slotIdx) {
+  currentZoomedSlot = slotIdx;
+  const modal = document.getElementById('photo-zoom-modal');
+  const img = document.getElementById('photo-zoom-img');
+  const title = document.getElementById('photo-zoom-title');
+  const btnRetake = document.getElementById('btn-retake-single');
+
+  if (title) title.textContent = `Foto 0${slotIdx} / 03`;
+  if (img) img.src = `/api/photo_preview/${slotIdx}?t=${Date.now()}`;
+  if (btnRetake) btnRetake.textContent = `↺ Retake Foto 0${slotIdx} Saja`;
+  if (modal) modal.classList.add('active');
+}
+
+function closePhotoZoom() {
+  const modal = document.getElementById('photo-zoom-modal');
+  if (modal) modal.classList.remove('active');
+}
+
+function onZoomModalBgClick(e) {
+  if (e.target.id === 'photo-zoom-modal') {
+    closePhotoZoom();
+  }
+}
+
+async function retakeCurrentZoomedPhoto() {
+  const slot = currentZoomedSlot;
+  closePhotoZoom();
+  const res = await doAction('retake_slot', {slot});
+  if (res.ok) {
+    showToast(`Mengulang Foto 0${slot}... Silakan bersiap!`, 2500);
+  }
 }
 
 async function doAction(action, extra = {}) {
@@ -5842,13 +6115,13 @@ function handleFistClick() {
 }
 
 function getInteractiveAt(x, y) {
-  const candidates = document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn');
+  const candidates = document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn, .review-card');
   for (const el of candidates) {
     const rect = el.getBoundingClientRect();
     const pad = 16;
     if (x >= rect.left - pad && x <= rect.right + pad &&
         y >= rect.top - pad && y <= rect.bottom + pad) {
-      if (!el.disabled && el.closest('.screen.active')) return el;
+      if (!el.disabled && (el.closest('.screen.active') || el.closest('#photo-zoom-modal.active'))) return el;
     }
   }
   return null;
