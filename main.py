@@ -109,6 +109,22 @@ from flask import (Flask, Response, request, jsonify, send_file,
 import qrcode
 import qrcode.image.pil
 
+# Cloudinary for cloud photo upload & download QR
+try:
+    import cloudinary
+    import cloudinary.uploader
+    CLOUDINARY_AVAILABLE = True
+    cloudinary.config(
+        cloud_name="qnwklkqx",
+        api_key="634594678846185",
+        api_secret="MxaoT9luKZEPlN8mOp_SSbi5OHE",
+        secure=True
+    )
+    print("[CLOUD] Cloudinary initialized successfully.")
+except Exception as e:
+    CLOUDINARY_AVAILABLE = False
+    print(f"[CLOUD WARN] Cloudinary init failed: {e}")
+
 # Camera Enumeration (cv2-enumerate-cameras)
 CV2_ENUM_AVAILABLE = False
 CV2_ENUM_ERROR = ""
@@ -324,6 +340,7 @@ class AppSession:
         self.photos: List[str] = []             # Captured photo file paths
         self.selected_frame: Optional[str] = None
         self.final_image_path: Optional[str] = None
+        self.cloud_download_url: Optional[str] = None
         self.payment_state: str = "idle"        # idle, creating, pending, success, failed, expired
         self.payment_order_id: Optional[str] = None
         self.payment_transaction_id: Optional[str] = None
@@ -344,6 +361,7 @@ class AppSession:
         self.photos = []
         self.selected_frame = None
         self.final_image_path = None
+        self.cloud_download_url = None
         self.payment_state = "idle"
         self.payment_order_id = None
         self.payment_transaction_id = None
@@ -377,6 +395,7 @@ class AppSession:
             "photos_needed": 3,
             "selected_frame": self.selected_frame,
             "final_image_path": self.final_image_path,
+            "cloud_download_url": self.cloud_download_url,
             "payment_state": self.payment_state,
             "payment_order_id": self.payment_order_id,
             "payment_amount": self.payment_amount,
@@ -2085,6 +2104,29 @@ class SessionController:
         out_path = frame_manager.composite(frame_file, photo_paths)
         with session_lock:
             session.final_image_path = out_path
+
+        # Upload composite image to Cloudinary with auto-download attachment flag
+        if out_path and CLOUDINARY_AVAILABLE:
+            try:
+                sid = session.session_id
+                print(f"[CLOUD] Uploading composite image to Cloudinary: {sid}...")
+                upload_res = cloudinary.uploader.upload(
+                    out_path,
+                    folder="photobooth_expo",
+                    public_id=f"photobooth_{sid}",
+                    resource_type="image",
+                    overwrite=True
+                )
+                raw_url = upload_res.get("secure_url") or upload_res.get("url")
+                if raw_url:
+                    # Inject fl_attachment so scanning instantly triggers the download prompt on mobile browsers!
+                    download_url = raw_url.replace("/upload/", f"/upload/fl_attachment:photobooth_{sid}/")
+                    with session_lock:
+                        session.cloud_download_url = download_url
+                    print(f"[CLOUD] Upload successful! Public Direct Download URL: {download_url}")
+            except Exception as e:
+                print(f"[CLOUD ERROR] Upload to Cloudinary failed: {e}")
+
         if out_path:
             self.transition(SessionState.QR)
         else:
@@ -2686,11 +2728,20 @@ def api_final_qr():
     with session_lock:
         sid = session.session_id
         fpath = session.final_image_path
+        cloud_url = session.cloud_download_url
     if not fpath or not os.path.exists(fpath):
         return jsonify({"ok": False})
-    download_url = f"http://127.0.0.1:5000/download/{sid}"
+
+    # Prioritize Cloudinary URL so any smartphone on cellular data can scan & download immediately!
+    download_url = cloud_url or f"http://127.0.0.1:5000/download/{sid}"
     qr_b64 = make_qr_b64(download_url, size=400)
-    return jsonify({"ok": True, "qr_b64": qr_b64, "url": download_url})
+    is_cloud = bool(cloud_url)
+    return jsonify({
+        "ok": True,
+        "qr_b64": qr_b64,
+        "url": download_url,
+        "is_cloud": is_cloud
+    })
 
 @app.route("/download/<session_id>")
 def download_photo(session_id: str):
@@ -4557,6 +4608,9 @@ body.dark-mode .settings-footer .btn-ghost:hover {
         <img id="final-qr-img" src="" alt="Download QR">
         <div id="final-qr-loading" class="spinner"></div>
       </div>
+      <div id="final-qr-cloud-badge" style="font-size: var(--text-xs); color: #22c55e; font-weight: 600; margin-top: 4px; display: none;">
+        ✨ Direct Download Ready (Auto-download on scan)
+      </div>
       <div style="display: flex; gap: 16px; margin-top: 12px;">
         <button class="btn btn-secondary btn-interactive" onclick="doAction('print_photo')">🖨 Print Photo</button>
         <button class="btn btn-primary btn-interactive" onclick="doAction('go_success')">Done ✓</button>
@@ -5551,6 +5605,10 @@ async function loadFinalQR() {
     if (data.ok && data.qr_b64) {
       document.getElementById('final-qr-img').src = 'data:image/png;base64,' + data.qr_b64;
       document.getElementById('final-qr-loading').style.display = 'none';
+      const cloudBadge = document.getElementById('final-qr-cloud-badge');
+      if (cloudBadge) {
+        cloudBadge.style.display = data.is_cloud ? 'block' : 'none';
+      }
     }
   } catch(e) {}
 }
