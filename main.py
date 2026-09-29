@@ -163,7 +163,9 @@ CAMERA_FPS = 30               # Target FPS
 CAMERA_MIRROR = True          # Horizontally flip preview
 CAMERA_ROTATE = 0             # 0, 90, 180, 270 degrees
 
-# ---- GESTURE ----
+# ---- CONTROLLER & GESTURE ----
+CONTROLLER_MODE = "gesture_only"  # 'gesture_only' (full hand gesture, touchpad/mouse disabled) or 'hybrid'
+BLOCK_TOUCHPAD = True             # Strictly block touchpad and physical mouse on kiosk
 HAND_CONFIDENCE = 0.55        # Min detection confidence
 GESTURE_CONFIDENCE = 0.60     # Min gesture recognition confidence
 GESTURE_SMOOTHING = 0.28      # Cursor lerp factor (0=no movement, 1=instant)
@@ -287,6 +289,8 @@ config = {
     "show_gesture_label": SHOW_GESTURE_LABEL,
     "debug_mode": DEBUG_MODE,
     "auto_reset_timeout": AUTO_RESET_TIMEOUT,
+    "controller_mode": CONTROLLER_MODE,
+    "block_touchpad": BLOCK_TOUCHPAD,
 }
 
 # ============================================================
@@ -2099,7 +2103,7 @@ class SessionController:
 
     def go_success(self):
         self.transition(SessionState.SUCCESS)
-        threading.Thread(target=self._auto_reset, args=(8,), daemon=True).start()
+        threading.Thread(target=self._auto_reset, args=(10,), daemon=True).start()
 
     def _auto_reset(self, delay: float):
         time.sleep(delay)
@@ -2534,6 +2538,13 @@ def api_action():
             ctrl.start_payment()
             return jsonify({"ok": True})
 
+    elif action == "back_to_review":
+        if session.state in (SessionState.PAYMENT, SessionState.FRAMES):
+            ctrl.stop_payment_poll()
+            ctrl.transition(SessionState.REVIEW)
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Cannot back to review from current state"})
+
     elif action == "select_frame":
         filename = data.get("filename", "")
         if filename and session.state == SessionState.FRAMES:
@@ -2765,7 +2776,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="id">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Rencana Tuhan Studio — Photo Booth</title>
 <meta name="description" content="Premium photo booth experience by Rencana Tuhan Studio">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -2841,7 +2852,43 @@ html, body {
   font-family: var(--font);
   background: var(--col-bg);
   color: var(--col-text);
-  cursor: default;
+  touch-action: none;
+}
+
+/* KIOSK FULL GESTURE CONTROLLER: HIDE & BLOCK PHYSICAL CURSOR */
+body.gesture-control,
+body.gesture-control *,
+body.gesture-control .screen,
+body.gesture-control .btn,
+body.gesture-control .btn-interactive,
+body.gesture-control .landing-cta-btn,
+body.gesture-control .frame-card {
+  cursor: none !important;
+}
+
+/* Allow mouse cursor inside Admin Settings Modal for operator */
+#settings-modal,
+#settings-modal * {
+  cursor: default !important;
+}
+
+/* Prevent native mouse hover scaling when in gesture mode; only virtual cursor hover triggers */
+body.gesture-control .btn:hover:not(.hovered),
+body.gesture-control .landing-cta-btn:hover:not(.hovered),
+body.gesture-control .frame-card:hover:not(.hovered) {
+  transform: none !important;
+  box-shadow: inherit !important;
+}
+
+/* Virtual cursor hover effect */
+.btn.hovered, .landing-cta-btn.hovered, .frame-card.hovered {
+  transform: scale(1.05) !important;
+  box-shadow: 0 0 24px rgba(88, 78, 184, 0.45) !important;
+}
+
+.btn.gesture-clicked, .landing-cta-btn.gesture-clicked, .frame-card.gesture-clicked {
+  transform: scale(0.96) !important;
+  filter: brightness(1.25);
 }
 
 /* App Shell */
@@ -3322,19 +3369,42 @@ html, body {
   width: 52px; height: 52px;
   margin-left: -26px; margin-top: -26px;
   border-radius: 50%;
-  background: rgba(253, 192, 15, 0.30);
-  border: 3px solid var(--col-yellow);
+  background: rgba(253, 192, 15, 0.25);
+  border: 2.5px solid var(--col-yellow);
   box-shadow: 0 0 24px rgba(253,192,15,0.8), 0 0 8px rgba(253,192,15,0.5);
   pointer-events: none;
   z-index: 9999;
-  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 80ms ease;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 100ms ease;
   opacity: 0;
   will-change: left, top;
 }
 
+/* SVG Charging Ring for Fist & Peace */
+.cursor-ring-svg {
+  position: absolute;
+  inset: -3px;
+  width: calc(100% + 6px);
+  height: calc(100% + 6px);
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+.cursor-ring-bg {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.15);
+  stroke-width: 3.5;
+}
+.cursor-ring-fg {
+  fill: none;
+  stroke: var(--col-yellow);
+  stroke-width: 4;
+  stroke-dasharray: 138.23;
+  stroke-dashoffset: 138.23;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 40ms linear, stroke 150ms ease;
+}
+
 /* Center dot */
-#cursor::after {
-  content: '';
+.cursor-center-dot {
   position: absolute;
   top: 50%; left: 50%;
   transform: translate(-50%, -50%);
@@ -3342,27 +3412,40 @@ html, body {
   background: var(--col-yellow);
   border-radius: 50%;
   box-shadow: 0 0 6px rgba(253,192,15,1);
+  transition: background 150ms ease;
 }
 
 #cursor.fist {
-  background: rgba(88, 78, 184, 0.55);
-  border-color: #fff;
-  box-shadow: 0 0 24px rgba(88,78,184,0.8);
-  transform: scale(0.78);
+  background: rgba(88, 78, 184, 0.45);
+  border-color: #A78BFA;
+  box-shadow: 0 0 28px rgba(88,78,184,0.9);
+  transform: scale(0.85);
 }
-#cursor.fist::after {
+#cursor.fist .cursor-ring-fg {
+  stroke: #A78BFA;
+}
+#cursor.fist .cursor-center-dot {
   background: #fff;
-  box-shadow: 0 0 6px rgba(255,255,255,1);
+  box-shadow: 0 0 8px rgba(255,255,255,1);
+}
+
+#cursor.fist-clicked {
+  transform: scale(1.32) !important;
+  box-shadow: 0 0 40px rgba(88,78,184,1), 0 0 15px #fff !important;
+  background: rgba(88, 78, 184, 0.85) !important;
 }
 
 #cursor.peace {
-  background: rgba(34, 197, 94, 0.45);
+  background: rgba(34, 197, 94, 0.35);
   border-color: #22C55E;
-  box-shadow: 0 0 24px rgba(34,197,94,0.8);
+  box-shadow: 0 0 24px rgba(34,197,94,0.85);
 }
-#cursor.peace::after {
+#cursor.peace .cursor-ring-fg {
+  stroke: #22C55E;
+}
+#cursor.peace .cursor-center-dot {
   background: #22C55E;
-  box-shadow: 0 0 6px rgba(34,197,94,1);
+  box-shadow: 0 0 8px rgba(34,197,94,1);
 }
 
 /* Gesture Debug Overlay (shown when show_gesture_label=true) */
@@ -3394,30 +3477,83 @@ html, body {
   position: fixed;
   bottom: 24px; left: 24px;
   display: flex; align-items: center; gap: 12px;
-  background: rgba(255,255,255,0.85);
+  background: rgba(255,255,255,0.88);
   backdrop-filter: blur(12px);
   border: 1px solid var(--col-border);
   border-radius: var(--r-full);
-  padding: 8px 16px;
+  padding: 8px 18px;
   box-shadow: var(--shadow-sm);
   z-index: 1000;
+  transition: border-color var(--tr-fast), transform var(--tr-fast);
 }
 
 body.dark-mode #gesture-hud {
-  background: rgba(22,24,32,0.85);
+  background: rgba(22,24,32,0.88);
+}
+
+@keyframes hudShakeAlert {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); box-shadow: 0 0 20px rgba(239, 68, 68, 0.6); }
+  40%, 80% { transform: translateX(6px); box-shadow: 0 0 20px rgba(239, 68, 68, 0.6); }
+}
+
+#gesture-hud.hud-alert-pulse {
+  animation: hudShakeAlert 400ms ease;
+  border-color: var(--col-error) !important;
 }
 
 .hud-item {
   display: flex; align-items: center; gap: 6px;
   font-size: var(--text-xs); font-weight: 700;
   color: var(--col-text-3);
-  opacity: 0.5;
+  opacity: 0.55;
   transition: opacity var(--tr-fast), color var(--tr-fast);
 }
 
 .hud-item.active {
   opacity: 1;
   color: var(--col-blue-1);
+}
+
+.hud-badge {
+  background: rgba(88, 78, 184, 0.12);
+  border: 1px solid rgba(88, 78, 184, 0.30);
+  color: var(--col-blue-1) !important;
+  border-radius: var(--r-full);
+  padding: 3px 10px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  opacity: 1 !important;
+}
+
+.hud-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--col-border);
+}
+
+.controller-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: rgba(88, 78, 184, 0.08);
+  border: 1px solid rgba(88, 78, 184, 0.25);
+  border-radius: var(--r-full);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--col-blue-1);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.controller-status-pill .ctrl-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--col-success);
+  box-shadow: 0 0 8px var(--col-success);
 }
 
 /* F10 SETTINGS MODAL */
@@ -3668,7 +3804,10 @@ body.dark-mode #gesture-hud {
 
   <!-- LANDING -->
   <div class="screen active" id="screen-landing">
-    <div class="brand-badge">Rencana Tuhan Studio</div>
+    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;">
+      <div class="brand-badge">Rencana Tuhan Studio</div>
+      <div class="controller-status-pill"><span class="ctrl-dot"></span><span>🎮 FULL GESTURE CONTROLLER</span></div>
+    </div>
     <h1 class="landing-title">Capture Your Joy,<br>Touch-Free.</h1>
     <p class="landing-sub">Step into the future of studio photography. Use natural hand gestures to create and print your memories.</p>
     
@@ -3690,6 +3829,9 @@ body.dark-mode #gesture-hud {
         <span class="guide-step-icon">✌️</span>
         <span>Hold Peace = Snap Photo</span>
       </div>
+    </div>
+    <div style="font-size: 11px; color: var(--col-text-3); font-weight: 600; margin-top: -12px;">
+      🚫 Touchpad & mouse dinonaktifkan • Kontrol 100% menggunakan gestur tangan
     </div>
   </div>
 
@@ -3728,7 +3870,7 @@ body.dark-mode #gesture-hud {
         <div class="camera-error-icon">📷</div>
         <div class="camera-error-title">CAMERA UNAVAILABLE</div>
         <div class="camera-error-text">Searching for camera device. Please ensure your camera is connected.</div>
-        <button class="btn btn-primary" onclick="retryCamera()">RETRY CAMERA</button>
+        <button class="btn btn-primary btn-interactive" onclick="retryCamera()">RETRY CAMERA</button>
       </div>
     </div>
   </div>
@@ -3763,7 +3905,8 @@ body.dark-mode #gesture-hud {
         Operator: tekan <b>F9 sebanyak 3x</b> setelah pembayaran selesai untuk mengonfirmasi.
       </div>
 
-      <div style="display: flex; gap: 12px; margin-top: 8px;" id="demo-payment-row">
+      <div style="display: flex; gap: 12px; margin-top: 8px; flex-wrap: wrap; justify-content: center;" id="demo-payment-row">
+        <button class="btn btn-ghost btn-interactive" onclick="doAction('back_to_review')">← Back to Review</button>
         <button class="btn btn-ghost btn-interactive" onclick="simulatePayment()">⚡ Simulate Payment (Demo)</button>
         <button class="btn btn-ghost btn-interactive" id="btn-retry-payment" style="display:none;" onclick="retryPayment()">Retry</button>
       </div>
@@ -3775,7 +3918,8 @@ body.dark-mode #gesture-hud {
     <div class="brand-badge">Frame Design</div>
     <h2 style="font-size: var(--text-2xl); font-weight: 800;">Choose Your Studio Frame</h2>
     <div class="frames-grid" id="frames-grid"></div>
-    <div style="display: flex; gap: 16px; margin-top: 12px;">
+    <div style="display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; justify-content: center;">
+      <button class="btn btn-ghost btn-interactive" onclick="doAction('back_to_review')">← Back</button>
       <button class="btn btn-primary btn-interactive" id="btn-confirm-frame" onclick="doAction('confirm_frame')" disabled style="opacity:0.5;">
         Confirm Frame & Composite →
       </button>
@@ -3822,14 +3966,29 @@ body.dark-mode #gesture-hud {
   <div class="screen" id="screen-success">
     <div style="font-size: 64px;">✨</div>
     <h1 style="font-size: var(--text-3xl); font-weight: 900; color: var(--col-blue-1);">Thank You!</h1>
-    <p style="font-size: var(--text-lg); color: var(--col-text-2);">We hope you loved your Rencana Tuhan Studio photo experience.</p>
-    <div style="font-size: var(--text-sm); font-weight: 700; color: var(--col-yellow-dark);" id="success-countdown">Returning to home in 8s...</div>
+    <p style="font-size: var(--text-lg); color: var(--col-text-2); max-width: 560px; text-align: center;">We hope you loved your Rencana Tuhan Studio photo experience.</p>
+    <div style="font-size: var(--text-sm); font-weight: 700; color: var(--col-yellow-dark);" id="success-countdown">Kembali ke Home dalam 10 detik...</div>
+    <div style="margin-top: 24px; display: flex; flex-direction: column; align-items: center; gap: 12px;">
+      <button class="btn btn-primary btn-interactive" onclick="goHome()" style="padding: 14px 42px; font-size: var(--text-base); font-weight: 800; display: inline-flex; align-items: center; gap: 10px;">
+        <span>🏠 Kembali ke Home</span>
+        <span>→</span>
+      </button>
+      <div style="font-size: var(--text-xs); color: var(--col-text-3); font-weight: 600;">
+        Arahkan kursor & kepalkan tangan (✊) atau tahan pose Peace (✌️)
+      </div>
+    </div>
   </div>
 
 </div>
 
 <!-- Virtual Cursor -->
-<div id="cursor"></div>
+<div id="cursor">
+  <svg class="cursor-ring-svg" viewBox="0 0 52 52">
+    <circle class="cursor-ring-bg" cx="26" cy="26" r="22"></circle>
+    <circle class="cursor-ring-fg" id="cursor-progress-fill" cx="26" cy="26" r="22"></circle>
+  </svg>
+  <div class="cursor-center-dot"></div>
+</div>
 
 <!-- Flash overlay -->
 <div id="flash-overlay"></div>
@@ -3847,6 +4006,8 @@ body.dark-mode #gesture-hud {
 
 <!-- Gesture HUD -->
 <div id="gesture-hud">
+  <div class="hud-item hud-badge" id="hud-ctrl-mode" title="Mode Controller Aktif">🎮 <span id="hud-ctrl-text">FULL GESTURE</span></div>
+  <div class="hud-divider"></div>
   <div class="hud-item" id="gest-hand" title="Hand Detected">👋<span id="gest-hand-txt">NO HAND</span></div>
   <div class="hud-item" id="gest-palm">✋<span>PALM</span></div>
   <div class="hud-item" id="gest-fist">✊<span>FIST</span></div>
@@ -3865,7 +4026,8 @@ body.dark-mode #gesture-hud {
     </div>
     <div class="settings-body">
       <div class="settings-nav">
-        <div class="settings-nav-item active" onclick="showSettingsSection('camera')">📷 Camera</div>
+        <div class="settings-nav-item active" onclick="showSettingsSection('controller')">🎮 Controller</div>
+        <div class="settings-nav-item" onclick="showSettingsSection('camera')">📷 Camera</div>
         <div class="settings-nav-item" onclick="showSettingsSection('diagnostics')">🧪 Diagnostics</div>
         <div class="settings-nav-item" onclick="showSettingsSection('gesture')">🤚 Gesture</div>
         <div class="settings-nav-item" onclick="showSettingsSection('display')">🖥 Display</div>
@@ -3876,8 +4038,85 @@ body.dark-mode #gesture-hud {
         <div class="settings-nav-item" onclick="showSettingsSection('debug')">🐛 Debug</div>
       </div>
       <div class="settings-content">
+        <!-- CONTROLLER SETTINGS -->
+        <div class="settings-section active" id="settings-controller">
+          <div class="settings-group">
+            <div class="settings-group-title">Pengaturan Controller Kiosk</div>
+            <div class="settings-row">
+              <div class="settings-label">
+                <strong>Mode Controller</strong>
+                <div style="font-size: 11px; color: var(--col-text-2);">Kiosk hanya bisa dioperasikan lewat gestur tangan (touchpad terkunci).</div>
+              </div>
+              <div class="settings-control">
+                <select id="cfg-controller_mode">
+                  <option value="gesture_only">Full Gesture Tangan (Touchpad & Mouse Diblokir)</option>
+                  <option value="hybrid">Hybrid (Gesture + Touchpad/Mouse Diizinkan)</option>
+                </select>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">
+                <strong>Blokir Touchpad & Mouse Fisik</strong>
+                <div style="font-size: 11px; color: var(--col-text-2);">Nonaktifkan semua klik dan gerakan touchpad pada layar photobooth.</div>
+              </div>
+              <div class="settings-control">
+                <div class="settings-toggle on" id="cfg-block_touchpad" onclick="toggleSetting(this)"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">Status Controller Saat Ini</div>
+            <div class="diag-grid">
+              <div class="diag-card">
+                <div class="diag-card-title">Controller Mode</div>
+                <div class="diag-card-value" style="color: var(--col-blue-1); font-size: 15px;" id="diag-ctrl-mode">FULL GESTURE</div>
+              </div>
+              <div class="diag-card">
+                <div class="diag-card-title">Touchpad Hardware</div>
+                <div class="diag-card-value" style="color: var(--col-error); font-size: 15px;" id="diag-ctrl-touchpad">BLOCKED (OFF)</div>
+              </div>
+              <div class="diag-card">
+                <div class="diag-card-title">Kursor Fisik</div>
+                <div class="diag-card-value" style="font-size: 15px;" id="diag-ctrl-cursor">TERSEMBUNYI</div>
+              </div>
+              <div class="diag-card">
+                <div class="diag-card-title">Hand Tracker</div>
+                <div class="diag-card-value" style="color: var(--col-success); font-size: 15px;" id="diag-ctrl-tracker">ONLINE</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-group">
+            <div class="settings-group-title">Daftar Kontrol Gestur Tangan</div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <div style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--col-bg-2); border-radius: var(--r-md); border: 1px solid var(--col-border);">
+                <span style="font-size: 26px;">✋</span>
+                <div>
+                  <strong style="font-size: 13px;">Telapak Tangan Terbuka (Open Palm)</strong>
+                  <div style="font-size: 11px; color: var(--col-text-2);">Menggerakkan kursor virtual di layar. Arahkan ke tombol yang ingin dipilih.</div>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--col-bg-2); border-radius: var(--r-md); border: 1px solid var(--col-border);">
+                <span style="font-size: 26px;">✊</span>
+                <div>
+                  <strong style="font-size: 13px;">Kepalan Tangan (Hold Fist 350ms)</strong>
+                  <div style="font-size: 11px; color: var(--col-text-2);">Tahan kepalan tangan untuk mengisi ring dan mengeklik tombol yang diarahkan.</div>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--col-bg-2); border-radius: var(--r-md); border: 1px solid var(--col-border);">
+                <span style="font-size: 26px;">✌️</span>
+                <div>
+                  <strong style="font-size: 13px;">Pose Dua Jari (Peace Sign 1.2s)</strong>
+                  <div style="font-size: 11px; color: var(--col-text-2);">Tahan pose peace untuk memulai countdown foto 3 detik atau lanjut dari review.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- CAMERA -->
-        <div class="settings-section active" id="settings-camera">
+        <div class="settings-section" id="settings-camera">
           <div class="settings-group">
             <div class="settings-group-title">Camera Device</div>
             <div id="camera-devices-container" class="camera-cards-list"></div>
@@ -4187,7 +4426,7 @@ let appState = {
   inferenceMs: 0,
   cameraFps: 0,
   faceCount: 0,
-  config: {},
+  config: { controller_mode: 'gesture_only', block_touchpad: true },
   frames: [],
   selectedFrame: null,
   paymentState: 'idle',
@@ -4218,9 +4457,93 @@ let fistArmed = true;
 let peaceArmed = true;
 let inCooldown = false;
 let countdownRunning = false;
+let isGestureDispatching = false;
+let lastTouchpadWarning = 0;
+
+function setupTouchpadBlocker() {
+  const BLOCKED_EVENTS = [
+    'click', 'dblclick', 'mousedown', 'mouseup', 'mousemove',
+    'pointerdown', 'pointerup', 'pointermove',
+    'touchstart', 'touchend', 'touchmove', 'contextmenu', 'wheel'
+  ];
+
+  BLOCKED_EVENTS.forEach(evt => {
+    window.addEventListener(evt, (e) => {
+      // If admin settings modal is open and the event is inside it, allow operator to configure
+      if (settingsOpen && e.target && e.target.closest && e.target.closest('#settings-modal')) {
+        return;
+      }
+
+      // If full gesture mode is active (default)
+      const isGestureOnly = (appState.config.controller_mode !== 'hybrid') && (appState.config.block_touchpad !== false);
+      if (!isGestureOnly) return;
+
+      // Allow programmatic gesture-initiated dispatch
+      if (isGestureDispatching || !e.isTrusted) {
+        return;
+      }
+
+      // Block physical hardware events from touchpad / mouse
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+
+      // Show warning toast if user tries to tap or click touchpad
+      if (evt === 'click' || evt === 'mousedown' || evt === 'pointerdown' || evt === 'touchstart') {
+        const now = Date.now();
+        if (now - lastTouchpadWarning > 1800) {
+          lastTouchpadWarning = now;
+          showToast('⚠️ Touchpad Dinonaktifkan! Kontrol full dengan gestur tangan ✋ (Arahkan) & ✊ (Klik)', 3000);
+          const hud = document.getElementById('gesture-hud');
+          if (hud) {
+            hud.classList.add('hud-alert-pulse');
+            setTimeout(() => hud.classList.remove('hud-alert-pulse'), 500);
+          }
+        }
+      }
+      return false;
+    }, true);
+  });
+}
+
+function applyControllerConfig(cfg) {
+  if (!cfg) return;
+  const isGestureOnly = (cfg.controller_mode !== 'hybrid') && (cfg.block_touchpad !== false);
+  document.body.classList.toggle('gesture-control', isGestureOnly);
+
+  const ctrlTxt = document.getElementById('hud-ctrl-text');
+  if (ctrlTxt) {
+    ctrlTxt.textContent = isGestureOnly ? 'FULL GESTURE' : 'HYBRID MODE';
+  }
+
+  const diagMode = document.getElementById('diag-ctrl-mode');
+  if (diagMode) {
+    diagMode.textContent = isGestureOnly ? 'FULL GESTURE' : 'HYBRID';
+    diagMode.style.color = isGestureOnly ? 'var(--col-blue-1)' : 'var(--col-yellow)';
+  }
+
+  const diagPad = document.getElementById('diag-ctrl-touchpad');
+  if (diagPad) {
+    diagPad.textContent = isGestureOnly ? 'BLOCKED (OFF)' : 'ALLOWED (ON)';
+    diagPad.style.color = isGestureOnly ? 'var(--col-error)' : 'var(--col-success)';
+  }
+
+  const diagCur = document.getElementById('diag-ctrl-cursor');
+  if (diagCur) {
+    diagCur.textContent = isGestureOnly ? 'TERSEMBUNYI' : 'TERLIHAT';
+  }
+
+  const diagTrack = document.getElementById('diag-ctrl-tracker');
+  if (diagTrack) {
+    diagTrack.textContent = appState.handDetected ? 'DETECTED' : 'ONLINE';
+    diagTrack.style.color = appState.handDetected ? 'var(--col-success)' : 'var(--col-text-2)';
+  }
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   showScreen('landing');
+  setupTouchpadBlocker();
+  applyControllerConfig(appState.config);
   startPolling();
   startCursorPolling();
   setupKeyboard();
@@ -4324,6 +4647,7 @@ function updateState(data) {
   }
 
   document.getElementById('body').classList.toggle('dark-mode', cfg.dark_mode);
+  applyControllerConfig(cfg);
 
   const targetScreen = s.state;
   if (appState.screen !== targetScreen) {
@@ -4379,6 +4703,14 @@ function transitionToScreen(name) {
   if (name === 'qr' && !qrLoaded) loadFinalQR();
   if (name === 'payment') initPaymentScreen();
   if (name === 'success') startSuccessCountdown();
+  if (name === 'landing') {
+    qrLoaded = false;
+    framePreviewsLoaded = {};
+    if (successTimerInterval) {
+      clearInterval(successTimerInterval);
+      successTimerInterval = null;
+    }
+  }
   if (name === 'frames') {
     framePreviewsLoaded = {};
     loadFramePreviews();
@@ -4474,12 +4806,12 @@ function updatePaymentUI(data) {
   const mode = appState.paymentMode;
   const isManual = mode === 'manual';
 
-  // Manual QRIS: show operator hint, hide demo simulate button.
-  if (manualHint) manualHint.style.display = isManual ? 'block' : 'none';
+  // Manual QRIS: operator hint is kept hidden from public screen; operator confirms via F9 x3
+  if (manualHint) manualHint.style.display = 'none';
   if (demoRow) demoRow.style.display = (mode === 'demo') ? 'flex' : 'none';
 
   if (state === 'pending') {
-    if (statusEl) statusEl.textContent = isManual ? 'Scan QRIS & Bayar — Operator konfirmasi via F9 ×3' : 'Scan QRIS to Pay';
+    if (statusEl) statusEl.textContent = 'Scan QRIS & Bayar';
     if (spinnerEl) spinnerEl.style.display = 'none';
     if (qrImg && !qrImg.src.startsWith('data:') && !qrImg.src.includes('/api/qris_image')) loadPaymentQR();
     if (appState.paymentExpiry && !paymentTimerInterval) {
@@ -4555,6 +4887,9 @@ function renderFrameCards() {
     `;
     grid.appendChild(card);
   });
+  if (!appState.selectedFrame && appState.frames.length > 0) {
+    selectFrame(appState.frames[0].filename);
+  }
 }
 
 async function loadFramePreviews() {
@@ -4600,13 +4935,32 @@ async function loadFinalQR() {
   } catch(e) {}
 }
 
+function goHome() {
+  if (successTimerInterval) {
+    clearInterval(successTimerInterval);
+    successTimerInterval = null;
+  }
+  showScreen('landing');
+  doAction('reset');
+}
+
 function startSuccessCountdown() {
-  if (successTimerInterval) clearInterval(successTimerInterval);
-  let rem = 8;
+  if (successTimerInterval) {
+    clearInterval(successTimerInterval);
+    successTimerInterval = null;
+  }
+  let rem = 10;
   const el = document.getElementById('success-countdown');
   const update = () => {
-    if (el) el.textContent = `Returning to home in ${rem}s...`;
-    if (rem <= 0) clearInterval(successTimerInterval);
+    if (el) el.textContent = `Kembali ke Home dalam ${rem} detik...`;
+    if (rem <= 0) {
+      if (successTimerInterval) {
+        clearInterval(successTimerInterval);
+        successTimerInterval = null;
+      }
+      goHome();
+      return;
+    }
     rem--;
   };
   update();
@@ -4650,9 +5004,25 @@ function resetGestureLatches() {
 
 function updateGestureHUD() {
   const g = appState.gesture;
-  document.getElementById('gest-palm').classList.toggle('active', g === 'palm');
-  document.getElementById('gest-fist').classList.toggle('active', g === 'fist');
-  document.getElementById('gest-peace').classList.toggle('active', g === 'peace');
+  const handEl = document.getElementById('gest-hand');
+  const handTxt = document.getElementById('gest-hand-txt');
+  if (handEl) handEl.classList.toggle('active', !!appState.handDetected);
+  if (handTxt) handTxt.textContent = appState.handDetected ? 'HAND READY' : 'NO HAND';
+
+  document.getElementById('gest-palm')?.classList.toggle('active', g === 'palm');
+  document.getElementById('gest-fist')?.classList.toggle('active', g === 'fist');
+  document.getElementById('gest-peace')?.classList.toggle('active', g === 'peace');
+}
+
+function updateCursorProgress(progress, isFist = true) {
+  const ring = document.getElementById('cursor-progress-fill');
+  if (!ring) return;
+  const maxDash = 138.23;
+  if (progress <= 0) {
+    ring.style.strokeDashoffset = maxDash;
+  } else {
+    ring.style.strokeDashoffset = maxDash * (1 - Math.min(1.0, progress));
+  }
 }
 
 function processGestures(cfg) {
@@ -4682,9 +5052,11 @@ function processGestures(cfg) {
     ringOverlay.classList.add('visible');
     const offset = 376 * (1 - Math.min(1.0, appState.peaceProgress));
     ringFill.style.strokeDashoffset = offset;
+    updateCursorProgress(appState.peaceProgress, false);
   } else {
     ringOverlay.classList.remove('visible');
     ringFill.style.strokeDashoffset = 376;
+    if (g !== 'fist') updateCursorProgress(0.0);
   }
 
   // Explicit Peace State Machine: NONE -> HOLDING -> TRIGGERED -> WAIT_RELEASE
@@ -4709,11 +5081,15 @@ function processGestures(cfg) {
     if (fistState === 'ARMED') {
       fistState = 'PRESSING';
       fistPressStart = now;
+      updateCursorProgress(0.05, true);
     } else if (fistState === 'PRESSING') {
       const held = appState.fistStableMs || (now - fistPressStart);
+      const ratio = Math.min(1.0, held / clickThresh);
+      updateCursorProgress(ratio, true);
       if (held >= clickThresh && (now - lastFistClickTime >= cooldown)) {
         fistState = 'TRIGGERED';
         lastFistClickTime = now;
+        updateCursorProgress(1.0, true);
         handleFistClick();
         doAction('register_click');
         fistState = 'WAIT_RELEASE';
@@ -4725,9 +5101,11 @@ function processGestures(cfg) {
     if (fistState === 'WAIT_RELEASE' || fistState === 'TRIGGERED') {
       if (now - lastFistClickTime >= cooldown) {
         fistState = 'ARMED';
+        updateCursorProgress(0.0, true);
       }
     } else {
       fistState = 'ARMED';
+      updateCursorProgress(0.0, true);
     }
   }
 }
@@ -4743,6 +5121,7 @@ function clearGestureUI() {
   if (ring) ring.classList.remove('visible');
   const fill = document.getElementById('peace-ring-fill');
   if (fill) fill.style.strokeDashoffset = 376;
+  updateCursorProgress(0.0);
 }
 
 function handlePeaceAction() {
@@ -4750,6 +5129,12 @@ function handlePeaceAction() {
     if (!countdownRunning) startClientCountdown();
   } else if (appState.screen === 'review') {
     doAction('use_photos');
+  } else if (appState.screen === 'frames') {
+    if (appState.selectedFrame) doAction('confirm_frame');
+  } else if (appState.screen === 'qr') {
+    doAction('go_success');
+  } else if (appState.screen === 'success') {
+    goHome();
   }
 }
 
@@ -4758,9 +5143,23 @@ function handleFistClick() {
   const y = appState.cursor.y * window.innerHeight;
   const el = getInteractiveAt(x, y);
   if (el) {
-    el.click();
-    el.classList.add('hovered');
-    setTimeout(() => el.classList.remove('hovered'), 250);
+    const cursor = document.getElementById('cursor');
+    if (cursor) {
+      cursor.classList.add('fist-clicked');
+      setTimeout(() => cursor.classList.remove('fist-clicked'), 320);
+    }
+    isGestureDispatching = true;
+    try {
+      el.click();
+      el.classList.add('hovered', 'gesture-clicked');
+      setTimeout(() => el.classList.remove('gesture-clicked'), 300);
+    } catch(err) {
+      console.error('Gesture click error:', err);
+    } finally {
+      setTimeout(() => {
+        isGestureDispatching = false;
+      }, 60);
+    }
   }
 }
 
@@ -4887,7 +5286,7 @@ function setupKeyboard() {
 
       if (f9Presses.length >= F9_REQUIRED) {
         resetF9();
-        showToast('Payment confirmed (F9 ×3)');
+        showToast('Pembayaran Dikonfirmasi ✓');
         doAction('confirm_manual_payment');
       }
       return false;
@@ -4979,6 +5378,7 @@ async function loadSettingsFromServer() {
         pSel.appendChild(opt);
       });
     }
+    applyControllerConfig(cfg);
   } catch(e) {}
 }
 
@@ -5111,6 +5511,8 @@ async function saveSettings() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(updates)
     });
+    Object.assign(appState.config, updates);
+    applyControllerConfig(appState.config);
     showToast('Settings saved!');
     closeSettings();
   } catch(e) {
