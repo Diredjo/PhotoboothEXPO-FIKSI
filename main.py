@@ -3559,8 +3559,8 @@ body.dark-mode #gesture-hud {
 /* F10 SETTINGS MODAL */
 #settings-modal {
   position: fixed; inset: 0;
-  background: rgba(0,0,0,0.65);
-  backdrop-filter: blur(12px);
+  background: rgba(10, 12, 18, 0.72);
+  backdrop-filter: blur(14px);
   display: none; align-items: center; justify-content: center;
   z-index: 10000;
 }
@@ -3570,97 +3570,237 @@ body.dark-mode #gesture-hud {
 .settings-panel {
   background: var(--col-surface);
   border-radius: var(--r-xl);
-  width: 90vw; max-width: 940px;
-  height: 85vh; max-height: 780px;
+  width: 92vw; max-width: 980px;
+  height: 86vh; max-height: 760px;
   display: flex; flex-direction: column;
-  box-shadow: var(--shadow-lg);
+  box-shadow: 0 24px 64px rgba(0,0,0,0.28), 0 0 0 1px var(--col-border);
   border: 1px solid var(--col-border);
   overflow: hidden;
+  animation: modalFadeIn 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modalFadeIn {
+  from { opacity: 0; transform: scale(0.97) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 .settings-header {
-  padding: 24px 32px;
+  padding: 18px 28px;
   border-bottom: 1px solid var(--col-border);
   display: flex; justify-content: space-between; align-items: center;
+  background: var(--col-surface);
+  flex-shrink: 0;
+}
+
+.settings-header-left {
+  display: flex; align-items: center; gap: 10px;
+}
+
+.settings-header-title {
+  font-size: 18px; font-weight: 800;
+  color: var(--col-text);
+  letter-spacing: -0.3px;
+  display: flex; align-items: center; gap: 8px;
+  margin: 0;
+}
+
+.settings-header-badge {
+  font-size: 11px; font-weight: 800;
+  padding: 3px 9px;
+  border-radius: var(--r-full);
+  background: rgba(88, 78, 184, 0.10);
+  color: var(--col-blue-1);
+  border: 1px solid rgba(88, 78, 184, 0.22);
+  letter-spacing: 0.5px;
+}
+
+.settings-close-btn {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--col-border);
+  background: var(--col-bg-2);
+  color: var(--col-text-2);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all var(--tr-fast);
+}
+
+.settings-close-btn:hover {
+  background: var(--col-bg-3);
+  color: var(--col-text);
+  transform: rotate(90deg);
 }
 
 .settings-body {
-  flex: 1; display: flex;
+  flex: 1;
+  display: flex;
   overflow: hidden;
+  min-height: 0;
 }
 
 .settings-nav {
-  width: 220px;
+  width: 230px;
+  min-width: 230px;
   border-right: 1px solid var(--col-border);
-  padding: 16px 8px;
+  padding: 14px 10px;
   display: flex; flex-direction: column; gap: 4px;
   overflow-y: auto;
+  background: var(--col-surface-2);
+  flex-shrink: 0;
+}
+
+.settings-nav::-webkit-scrollbar {
+  width: 5px;
+}
+.settings-nav::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.12);
+  border-radius: 4px;
 }
 
 .settings-nav-item {
-  padding: 12px 18px;
-  border-radius: var(--r-md);
-  font-size: var(--text-sm); font-weight: 600;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px; font-weight: 600;
   color: var(--col-text-2);
   cursor: pointer;
-  transition: background var(--tr-fast), color var(--tr-fast);
+  display: flex; align-items: center; gap: 10px;
+  transition: all var(--tr-fast);
+  user-select: none;
+  border: 1px solid transparent;
 }
 
-.settings-nav-item:hover { background: var(--col-bg-2); }
-.settings-nav-item.active { background: var(--grad-blue-soft); color: var(--col-blue-1); font-weight: 700; }
+.settings-nav-item:hover {
+  background: rgba(88, 78, 184, 0.06);
+  color: var(--col-text);
+}
+
+.settings-nav-item.active {
+  background: #ffffff;
+  color: var(--col-blue-1);
+  font-weight: 800;
+  border-color: rgba(88, 78, 184, 0.20);
+  box-shadow: 0 2px 8px rgba(88, 78, 184, 0.08);
+}
 
 .settings-content {
   flex: 1;
   padding: 24px 32px;
   overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--col-bg);
+  min-width: 0;
+}
+
+.settings-content::-webkit-scrollbar {
+  width: 6px;
+}
+.settings-content::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,0.14);
+  border-radius: 4px;
 }
 
 .settings-section { display: none; }
-.settings-section.active { display: block; }
+.settings-section.active { display: block; animation: sectionFade 150ms ease; }
+
+@keyframes sectionFade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 .settings-group {
-  margin-bottom: 28px;
+  margin-bottom: 22px;
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: 14px;
+  padding: 18px 22px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.02);
+}
+
+.settings-group:last-child {
+  margin-bottom: 0;
 }
 
 .settings-group-title {
-  font-size: var(--text-sm); font-weight: 800;
-  letter-spacing: 1px; text-transform: uppercase;
+  font-size: 11px; font-weight: 800;
+  letter-spacing: 0.8px; text-transform: uppercase;
   color: var(--col-blue-1);
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+  display: flex; align-items: center; gap: 8px;
 }
 
 .settings-row {
   display: flex; justify-content: space-between; align-items: center;
   padding: 12px 0;
   border-bottom: 1px solid var(--col-border);
+  gap: 20px;
+}
+
+.settings-row:last-child {
+  border-bottom: none;
+  padding-bottom: 4px;
 }
 
 .settings-label {
-  font-size: var(--text-sm); font-weight: 600;
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-label strong {
+  display: block;
+  font-size: 13px; font-weight: 700;
+  color: var(--col-text);
+  margin-bottom: 2px;
 }
 
 .settings-hint {
-  font-size: var(--text-xs); color: var(--col-text-3); display: block;
+  font-size: 11px; color: var(--col-text-3);
+  line-height: 1.4;
+}
+
+.settings-control {
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: flex-end;
 }
 
 .settings-control input[type="text"],
 .settings-control input[type="number"],
 .settings-control select {
   padding: 8px 14px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--col-border);
+  border-radius: 8px;
+  border: 1.5px solid var(--col-border);
   background: var(--col-bg-2);
   color: var(--col-text);
-  font-family: var(--font); font-size: var(--text-sm);
-  min-width: 140px;
+  font-family: var(--font); font-size: 13px; font-weight: 600;
+  outline: none;
+  transition: all var(--tr-fast);
+  max-width: 320px;
+}
+
+.settings-control input[type="number"] {
+  width: 90px;
+  text-align: right;
+}
+
+.settings-control select {
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+
+.settings-control select:focus,
+.settings-control input:focus {
+  border-color: var(--col-blue-1);
+  box-shadow: 0 0 0 3px rgba(88, 78, 184, 0.15);
+  background: #ffffff;
 }
 
 .settings-toggle {
-  width: 48px; height: 26px;
+  width: 46px; height: 26px;
   background: var(--col-bg-3);
   border-radius: var(--r-full);
   position: relative; cursor: pointer;
   transition: background var(--tr-med);
+  flex-shrink: 0;
 }
 
 .settings-toggle.on { background: var(--col-blue-1); }
@@ -3673,20 +3813,21 @@ body.dark-mode #gesture-hud {
   background: #fff;
   border-radius: 50%;
   transition: transform var(--tr-med);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
 }
 
-.settings-toggle.on::after { transform: translateX(22px); }
+.settings-toggle.on::after { transform: translateX(20px); }
 
 /* Camera Device Cards in Settings */
 .camera-cards-list {
-  display: flex; flex-direction: column; gap: 12px;
-  margin-bottom: 16px;
+  display: flex; flex-direction: column; gap: 10px;
+  margin-bottom: 14px;
 }
 
 .camera-device-card {
-  padding: 16px 20px;
+  padding: 14px 18px;
   border-radius: var(--r-md);
-  border: 2px solid var(--col-border);
+  border: 1.5px solid var(--col-border);
   background: var(--col-bg-2);
   display: flex; justify-content: space-between; align-items: center;
   cursor: pointer;
@@ -3695,6 +3836,7 @@ body.dark-mode #gesture-hud {
 
 .camera-device-card:hover {
   border-color: var(--col-blue-1);
+  background: rgba(88, 78, 184, 0.04);
 }
 
 .camera-device-card.selected {
@@ -3704,11 +3846,12 @@ body.dark-mode #gesture-hud {
 }
 
 .camera-card-info {
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column; gap: 3px;
 }
 
 .camera-card-name {
-  font-weight: 700; font-size: var(--text-base);
+  font-weight: 700; font-size: var(--text-sm);
+  color: var(--col-text);
 }
 
 .camera-card-desc {
@@ -3716,10 +3859,11 @@ body.dark-mode #gesture-hud {
 }
 
 .camera-card-badge {
-  padding: 4px 12px;
+  padding: 4px 10px;
   border-radius: var(--r-full);
-  font-size: var(--text-xs); font-weight: 800;
+  font-size: 10px; font-weight: 800;
   text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .camera-card-badge.ready {
@@ -3732,6 +3876,11 @@ body.dark-mode #gesture-hud {
   color: var(--col-blue-1);
 }
 
+.camera-card-badge.error {
+  background: rgba(239,68,68,0.15);
+  color: var(--col-error);
+}
+
 /* Camera Live Test Area */
 .camera-test-panel {
   background: #000;
@@ -3740,7 +3889,8 @@ body.dark-mode #gesture-hud {
   position: relative;
   aspect-ratio: 16 / 9;
   max-width: 520px;
-  margin-top: 12px;
+  margin-top: 10px;
+  border: 1px solid var(--col-border);
 }
 
 .camera-test-panel img {
@@ -3750,32 +3900,161 @@ body.dark-mode #gesture-hud {
 
 /* Diagnostics Grid */
 .diag-grid {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px; margin-bottom: 24px;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px; margin-bottom: 20px;
 }
 
 .diag-card {
-  padding: 16px;
+  padding: 14px 16px;
   background: var(--col-bg-2);
   border: 1px solid var(--col-border);
-  border-radius: var(--r-md);
-  display: flex; flex-direction: column; gap: 6px;
+  border-radius: 12px;
+  display: flex; flex-direction: column; gap: 4px;
 }
 
 .diag-card-title {
-  font-size: var(--text-xs); font-weight: 700;
+  font-size: 10px; font-weight: 700;
   color: var(--col-text-3); text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .diag-card-value {
-  font-size: var(--text-lg); font-weight: 800;
+  font-size: 15px; font-weight: 800;
+  color: var(--col-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Settings Modal Footer — Dedicated bottom bar */
+.settings-footer {
+  height: 68px;
+  padding: 0 28px;
+  border-top: 1px solid var(--col-border);
+  display: flex; justify-content: flex-end; align-items: center; gap: 12px;
+  background: var(--col-surface);
+  flex-shrink: 0;
+  box-sizing: border-box;
+}
+
+.settings-footer .btn {
+  height: 40px;
+  min-width: 120px;
+  padding: 0 24px;
+  font-size: 13px; font-weight: 700;
+  border-radius: var(--r-full);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all var(--tr-fast);
+  cursor: pointer;
+}
+
+.settings-footer .btn-ghost {
+  border: 1.5px solid var(--col-border);
+  color: var(--col-text-2);
+  background: var(--col-bg-2);
+}
+
+.settings-footer .btn-ghost:hover {
+  background: var(--col-bg-3);
   color: var(--col-text);
 }
 
-.settings-footer {
-  padding: 16px 32px;
-  border-top: 1px solid var(--col-border);
-  display: flex; justify-content: flex-end; gap: 16px;
+.settings-footer .btn-primary {
+  background: var(--col-yellow);
+  color: #111318;
+  border: none;
+  font-weight: 800;
+  box-shadow: 0 2px 10px rgba(253, 192, 15, 0.35);
+}
+
+.settings-footer .btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(253, 192, 15, 0.5);
+}
+
+/* Dark Mode Overrides for Settings Modal */
+body.dark-mode .settings-panel {
+  background: #151722;
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+}
+body.dark-mode .settings-header,
+body.dark-mode .settings-footer {
+  background: #151722;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+body.dark-mode .settings-header-title {
+  color: #fff;
+}
+body.dark-mode .settings-close-btn {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #ccc;
+}
+body.dark-mode .settings-close-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+body.dark-mode .settings-nav {
+  background: #0F1017;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+body.dark-mode .settings-nav-item {
+  color: #9B9DAA;
+}
+body.dark-mode .settings-nav-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+body.dark-mode .settings-nav-item.active {
+  background: #1E2232;
+  color: #A78BFA;
+  border-color: rgba(167, 139, 250, 0.3);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+body.dark-mode .settings-content {
+  background: #11131C;
+}
+body.dark-mode .settings-group {
+  background: #171A27;
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+body.dark-mode .settings-row {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+body.dark-mode .settings-label strong {
+  color: #fff;
+}
+body.dark-mode .settings-control select,
+body.dark-mode .settings-control input {
+  background: #0F1017;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+body.dark-mode .settings-control select:focus,
+body.dark-mode .settings-control input:focus {
+  background: #151722;
+  border-color: #A78BFA;
+  box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.2);
+}
+body.dark-mode .diag-card {
+  background: #11131C;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+body.dark-mode .diag-card-value {
+  color: #fff;
+}
+body.dark-mode .camera-device-card {
+  background: #11131C;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+body.dark-mode .settings-footer .btn-ghost {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #ccc;
+}
+body.dark-mode .settings-footer .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
 }
 
 /* Toast */
@@ -4021,8 +4300,11 @@ body.dark-mode #gesture-hud {
 <div id="settings-modal">
   <div class="settings-panel" onclick="event.stopPropagation()">
     <div class="settings-header">
-      <h2 style="font-size: var(--text-lg); font-weight: 800;">⚙️ Admin Settings</h2>
-      <button class="btn btn-ghost" style="padding: 6px 14px;" onclick="closeSettings()">✕</button>
+      <div class="settings-header-left">
+        <h2 class="settings-header-title">⚙️ Admin Settings</h2>
+        <span class="settings-header-badge">F10 Kiosk Menu</span>
+      </div>
+      <button class="settings-close-btn" onclick="closeSettings()" title="Tutup (Esc)">✕</button>
     </div>
     <div class="settings-body">
       <div class="settings-nav">
@@ -4045,19 +4327,19 @@ body.dark-mode #gesture-hud {
             <div class="settings-row">
               <div class="settings-label">
                 <strong>Mode Controller</strong>
-                <div style="font-size: 11px; color: var(--col-text-2);">Kiosk hanya bisa dioperasikan lewat gestur tangan (touchpad terkunci).</div>
+                <span class="settings-hint">Kiosk dioperasikan melalui gestur tangan (touchpad dapat dikunci).</span>
               </div>
               <div class="settings-control">
                 <select id="cfg-controller_mode">
-                  <option value="gesture_only">Full Gesture Tangan (Touchpad & Mouse Diblokir)</option>
-                  <option value="hybrid">Hybrid (Gesture + Touchpad/Mouse Diizinkan)</option>
+                  <option value="gesture_only">Full Gesture Tangan (Touchpad Diblokir)</option>
+                  <option value="hybrid">Hybrid (Gesture + Touchpad/Mouse)</option>
                 </select>
               </div>
             </div>
             <div class="settings-row">
               <div class="settings-label">
                 <strong>Blokir Touchpad & Mouse Fisik</strong>
-                <div style="font-size: 11px; color: var(--col-text-2);">Nonaktifkan semua klik dan gerakan touchpad pada layar photobooth.</div>
+                <span class="settings-hint">Nonaktifkan semua klik dan gerakan touchpad pada layar photobooth.</span>
               </div>
               <div class="settings-control">
                 <div class="settings-toggle on" id="cfg-block_touchpad" onclick="toggleSetting(this)"></div>
@@ -4090,25 +4372,25 @@ body.dark-mode #gesture-hud {
           <div class="settings-group">
             <div class="settings-group-title">Daftar Kontrol Gestur Tangan</div>
             <div style="display: flex; flex-direction: column; gap: 8px;">
-              <div style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--col-bg-2); border-radius: var(--r-md); border: 1px solid var(--col-border);">
-                <span style="font-size: 26px;">✋</span>
+              <div class="gesture-guide-card">
+                <span style="font-size: 24px;">✋</span>
                 <div>
                   <strong style="font-size: 13px;">Telapak Tangan Terbuka (Open Palm)</strong>
-                  <div style="font-size: 11px; color: var(--col-text-2);">Menggerakkan kursor virtual di layar. Arahkan ke tombol yang ingin dipilih.</div>
+                  <div class="settings-hint">Menggerakkan kursor virtual di layar. Arahkan ke tombol yang ingin dipilih.</div>
                 </div>
               </div>
-              <div style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--col-bg-2); border-radius: var(--r-md); border: 1px solid var(--col-border);">
-                <span style="font-size: 26px;">✊</span>
+              <div class="gesture-guide-card">
+                <span style="font-size: 24px;">✊</span>
                 <div>
                   <strong style="font-size: 13px;">Kepalan Tangan (Hold Fist 350ms)</strong>
-                  <div style="font-size: 11px; color: var(--col-text-2);">Tahan kepalan tangan untuk mengisi ring dan mengeklik tombol yang diarahkan.</div>
+                  <div class="settings-hint">Tahan kepalan tangan untuk mengisi ring dan mengeklik tombol yang diarahkan.</div>
                 </div>
               </div>
-              <div style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: var(--col-bg-2); border-radius: var(--r-md); border: 1px solid var(--col-border);">
-                <span style="font-size: 26px;">✌️</span>
+              <div class="gesture-guide-card">
+                <span style="font-size: 24px;">✌️</span>
                 <div>
                   <strong style="font-size: 13px;">Pose Dua Jari (Peace Sign 1.2s)</strong>
-                  <div style="font-size: 11px; color: var(--col-text-2);">Tahan pose peace untuk memulai countdown foto 3 detik atau lanjut dari review.</div>
+                  <div class="settings-hint">Tahan pose peace untuk memulai countdown foto 3 detik atau konfirmasi layar.</div>
                 </div>
               </div>
             </div>
@@ -4268,6 +4550,8 @@ body.dark-mode #gesture-hud {
               <div class="settings-label">Grace Period (ms)</div>
               <div class="settings-control"><input type="number" id="cfg-primary_user_grace_ms" min="500" max="10000"></div>
             </div>
+          </div>
+
           <div class="settings-group">
             <div class="settings-group-title">Gesture Performance</div>
             <div class="settings-row">
