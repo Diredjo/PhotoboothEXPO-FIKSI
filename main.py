@@ -193,7 +193,8 @@ PHOTO_JPEG_QUALITY = 92       # Capture JPEG quality
 #   'midtrans' -> legacy Midtrans QRIS gateway (requires credentials/internet).
 PAYMENT_MODE = "manual"
 DEMO_MODE = False             # Legacy demo toggle kept for the demo provider path
-PHOTOBOOTH_PRICE = 25000      # Price in IDR (Rp)
+PHOTOBOOTH_PRICE = 5000       # Price in IDR (Rp 5.000 untuk semua pilihan bingkai)
+QRIS_RAW_DATA = "00020101021126610014COM.GO-JEK.WWW01189360091439590811730210G9590811730303UMI51440014ID.CO.QRIS.WWW0215ID10265981288940303UMI5204733853033605802ID5925Rencana Tuhan Studio Paym6008SIDOARJO61056127262070703A0163042877"
 PAYMENT_TIMEOUT_SEC = 300     # Payment expiry in seconds
 PAYMENT_POLL_INTERVAL = 2.5   # Seconds between status polls
 
@@ -223,17 +224,26 @@ SHOW_GESTURE_LABEL = False    # Show recognized gesture text on camera preview
 
 # Frame dimensions (matching standard kiosk format)
 FRAME_WIDTH = 1623
-FRAME_HEIGHT = 3556
+FRAME_HEIGHT = 3557
 
-# Frame slot definitions (Blue=top, Red=mid, Green=bottom)
+# Frame slot definitions
 FRAME_PRESETS = {
     "default_3slot": {
-        "width": FRAME_WIDTH,
-        "height": FRAME_HEIGHT,
+        "width": 1623,
+        "height": 3556,
         "slots": [
             {"x": 40, "y": 36,   "w": 1543, "h": 1060},  # Top
             {"x": 40, "y": 1248, "w": 1543, "h": 1060},  # Middle
             {"x": 40, "y": 2460, "w": 1543, "h": 1060},  # Bottom
+        ]
+    },
+    "FramePhotoBooth1.png": {
+        "width": 1623,
+        "height": 3557,
+        "slots": [
+            {"x": 132, "y": 300,  "w": 1359, "h": 785},  # Top Slot
+            {"x": 132, "y": 1215, "w": 1359, "h": 780},  # Middle Slot
+            {"x": 132, "y": 2128, "w": 1359, "h": 780},  # Bottom Slot
         ]
     }
 }
@@ -1823,18 +1833,29 @@ class FrameManager:
     def get_frame(self, filename: str) -> Optional[Dict]:
         return self.frames.get(filename)
 
+    def get_preset_for_frame(self, filename: str) -> Dict:
+        """Returns the layout preset (dimensions + slots) for a given frame."""
+        if filename in FRAME_PRESETS:
+            return FRAME_PRESETS[filename]
+        # Also check without directory if any
+        base = os.path.basename(filename)
+        if base in FRAME_PRESETS:
+            return FRAME_PRESETS[base]
+        return self.preset
+
     def composite(self, frame_filename: str, photo_paths: List[str]) -> Optional[str]:
         """
-        Composites 3 captured photos UNDER transparent holes in the 1623x3556 frame.
+        Composites 3 captured photos UNDER transparent holes in the frame.
         """
         frame_info = self.get_frame(frame_filename)
         if not frame_info:
             print(f"[COMPOSITE ERROR] Frame not found: {frame_filename}")
             return None
 
-        slots = self.preset["slots"]
-        total_w = self.preset["width"]
-        total_h = self.preset["height"]
+        preset = self.get_preset_for_frame(frame_filename)
+        slots = preset["slots"]
+        total_w = preset["width"]
+        total_h = preset["height"]
 
         canvas = Image.new("RGBA", (total_w, total_h), (255, 255, 255, 255))
 
@@ -1882,12 +1903,13 @@ class FrameManager:
         if not frame_info:
             return None
         try:
+            preset = self.get_preset_for_frame(frame_filename)
             scale = 0.2
-            pw = int(self.preset["width"] * scale)
-            ph = int(self.preset["height"] * scale)
+            pw = int(preset["width"] * scale)
+            ph = int(preset["height"] * scale)
             canvas = Image.new("RGBA", (pw, ph), (245, 245, 248, 255))
 
-            slots = self.preset["slots"]
+            slots = preset["slots"]
             for slot, path in zip(slots, photo_paths):
                 if not path or not os.path.exists(path):
                     continue
@@ -2768,6 +2790,320 @@ def payment_webhook():
                 session.payment_state = "success"
                 ctrl.stop_payment_poll()
     return jsonify({"ok": True})
+
+# ============================================================
+# CASHIER MOBILE HELPER ROUTE
+# ============================================================
+@app.route("/cashier")
+def cashier_page():
+    return render_template_string(CASHIER_TEMPLATE)
+
+CASHIER_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Kasir Booth — Rencana Tuhan Studio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --col-bg: #0D0F17;
+    --col-surface: #171A26;
+    --col-surface-2: #212638;
+    --col-border: rgba(255, 255, 255, 0.10);
+    --col-primary: #584EB8;
+    --col-success: #10B981;
+    --col-yellow: #FDC00F;
+    --col-danger: #EF4444;
+    --col-text: #FFFFFF;
+    --col-text-muted: #9CA3AF;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Poppins', sans-serif; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: var(--col-bg);
+    color: var(--col-text);
+    min-height: 100vh;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+  }
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: var(--col-surface);
+    border: 1px solid var(--col-border);
+    border-radius: 16px;
+    margin-bottom: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 8px; }
+  .brand h1 { font-size: 15px; font-weight: 800; color: #fff; }
+  .badge-live {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; font-weight: 700; color: var(--col-success);
+    background: rgba(16, 185, 129, 0.12);
+    padding: 4px 10px; border-radius: 999px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--col-success); box-shadow: 0 0 8px var(--col-success); animation: pulse 1.5s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .card {
+    background: var(--col-surface);
+    border: 1px solid var(--col-border);
+    border-radius: 20px;
+    padding: 22px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  }
+  .status-pill {
+    padding: 6px 14px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 14px;
+  }
+  .status-waiting { background: rgba(253, 192, 15, 0.15); color: var(--col-yellow); border: 1px solid rgba(253, 192, 15, 0.3); }
+  .status-idle { background: rgba(156, 163, 175, 0.15); color: var(--col-text-muted); border: 1px solid rgba(156, 163, 175, 0.2); }
+  .status-paid { background: rgba(16, 185, 129, 0.15); color: var(--col-success); border: 1px solid rgba(16, 185, 129, 0.3); }
+
+  .amount-display {
+    font-size: 38px;
+    font-weight: 900;
+    color: #fff;
+    margin: 4px 0 8px;
+  }
+  .order-id {
+    font-size: 12px;
+    color: var(--col-text-muted);
+    font-family: monospace;
+    background: var(--col-surface-2);
+    padding: 4px 10px;
+    border-radius: 8px;
+    margin-bottom: 18px;
+  }
+
+  /* Big Action Button */
+  .btn-pay {
+    width: 100%;
+    padding: 20px;
+    font-size: 17px;
+    font-weight: 900;
+    border: none;
+    border-radius: 18px;
+    cursor: pointer;
+    background: linear-gradient(135deg, #10B981, #059669);
+    color: #fff;
+    box-shadow: 0 10px 24px rgba(16, 185, 129, 0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: transform 0.1s, opacity 0.2s;
+  }
+  .btn-pay:active { transform: scale(0.97); }
+  .btn-pay:disabled {
+    background: #2D3345;
+    color: #6B7280;
+    box-shadow: none;
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  .quick-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    width: 100%;
+    margin-top: 14px;
+  }
+  .btn-sub {
+    padding: 12px;
+    font-size: 12px;
+    font-weight: 700;
+    border: 1px solid var(--col-border);
+    border-radius: 12px;
+    background: var(--col-surface-2);
+    color: #fff;
+    cursor: pointer;
+  }
+  .btn-sub:active { transform: scale(0.97); }
+
+  .info-box {
+    margin-top: auto;
+    padding: 14px;
+    background: rgba(88, 78, 184, 0.08);
+    border: 1px solid rgba(88, 78, 184, 0.2);
+    border-radius: 14px;
+    font-size: 12px;
+    color: var(--col-text-muted);
+    text-align: center;
+    line-height: 1.5;
+  }
+  .toast {
+    position: fixed;
+    top: 20px; left: 50%; transform: translateX(-50%);
+    background: #10B981; color: #fff;
+    font-weight: 700; font-size: 13px;
+    padding: 10px 20px; border-radius: 999px;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.5);
+    display: none; z-index: 1000;
+  }
+</style>
+</head>
+<body>
+  <div class="toast" id="toast"></div>
+
+  <div class="header">
+    <div class="brand">
+      <span style="font-size: 20px;">⚡</span>
+      <h1>Kasir Booth Kiosk</h1>
+    </div>
+    <div class="badge-live">
+      <span class="dot"></span>
+      <span id="txt-conn">TERHUBUNG</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="status-pill status-idle" id="pill-status">MEMUAT STATUS...</div>
+    <div style="font-size: 13px; color: var(--col-text-muted);">Total Tagihan Sesi Ini</div>
+    <div class="amount-display" id="amt-display">Rp 5.000</div>
+    <div class="order-id" id="txt-order">Order ID: -</div>
+
+    <button class="btn-pay" id="btn-confirm" onclick="confirmPayment()" disabled>
+      <span>✅ KONFIRMASI BAYAR</span>
+    </button>
+
+    <div class="quick-actions">
+      <button class="btn-sub" onclick="resetKiosk()">↺ Reset Booth</button>
+      <button class="btn-sub" onclick="triggerTest()">📸 Tes Sesi</button>
+    </div>
+  </div>
+
+  <div class="info-box">
+    💡 <b>Petunjuk Operator:</b><br>
+    Saat pengunjung selesai scan QRIS di layar booth dan membayar <b>Rp 5.000</b>, tekan tombol <b>Konfirmasi Bayar</b> di atas. Layar booth akan langsung lanjut otomatis ke pemilihan frame.
+  </div>
+
+<script>
+  let lastState = '';
+  let isConfirming = false;
+
+  async function pollStatus() {
+    try {
+      const res = await fetch('/api/state');
+      if (!res.ok) return;
+      const data = await res.json();
+      const s = data.session || {};
+      const p = data.payment || {};
+
+      const screen = (s.state || '').toLowerCase();
+      const payState = (s.payment_state || '').toLowerCase();
+      const amt = p.amount || 5000;
+      const order = s.payment_order_id || s.session_id || '-';
+
+      document.getElementById('amt-display').textContent = `Rp ${Number(amt).toLocaleString('id-ID')}`;
+      document.getElementById('txt-order').textContent = `Order: ${order}`;
+
+      const pill = document.getElementById('pill-status');
+      const btn = document.getElementById('btn-confirm');
+
+      if (screen === 'payment' && payState === 'pending') {
+        pill.textContent = '⏳ MENUNGGU PEMBAYARAN';
+        pill.className = 'status-pill status-waiting';
+        btn.disabled = false;
+        btn.innerHTML = '<span>✅ TERIMA BAYAR (Rp 5.000)</span>';
+        if (lastState !== 'waiting') {
+          if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+        }
+        lastState = 'waiting';
+      } else if (screen === 'payment' && payState === 'success') {
+        pill.textContent = '✓ SUDAH TERBAYAR';
+        pill.className = 'status-pill status-paid';
+        btn.disabled = true;
+        btn.innerHTML = '<span>✓ PEMBAYARAN SUKSES</span>';
+        lastState = 'paid';
+      } else {
+        pill.textContent = `LAYAR BOOTH: ${screen.toUpperCase()}`;
+        pill.className = 'status-pill status-idle';
+        btn.disabled = true;
+        btn.innerHTML = '<span>MENUNGGU LAYAR BAYAR...</span>';
+        lastState = screen;
+      }
+    } catch(e) {
+      document.getElementById('txt-conn').textContent = 'OFFLINE';
+    }
+  }
+
+  async function confirmPayment() {
+    if (isConfirming) return;
+    isConfirming = true;
+    showToast('Memverifikasi pembayaran...');
+    try {
+      const res = await fetch('/api/action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'confirm_manual_payment'})
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showToast('Pembayaran Berhasil Dikonfirmasi! ✓');
+        if (navigator.vibrate) navigator.vibrate(200);
+      }
+    } catch(e) {
+      showToast('Gagal memverifikasi');
+    } finally {
+      setTimeout(() => { isConfirming = false; }, 800);
+      pollStatus();
+    }
+  }
+
+  async function resetKiosk() {
+    if (!confirm('Yakin ingin mereset sesi booth ke awal?')) return;
+    try {
+      await fetch('/api/action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'reset'})
+      });
+      showToast('Booth berhasil direset');
+      pollStatus();
+    } catch(e) {}
+  }
+
+  async function triggerTest() {
+    try {
+      await fetch('/api/action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'start_camera'})
+      });
+      showToast('Sesi booth dimulai');
+      pollStatus();
+    } catch(e) {}
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.style.display = 'block';
+    setTimeout(() => { t.style.display = 'none'; }, 2200);
+  }
+
+  setInterval(pollStatus, 1000);
+  pollStatus();
+</script>
+</body>
+</html>
+"""
 
 # ============================================================
 # HTML / CSS / JS TEMPLATE
@@ -4173,7 +4509,7 @@ body.dark-mode .settings-footer .btn-ghost:hover {
   <div class="screen" id="screen-payment">
     <div class="brand-badge">QRIS Payment</div>
     <div class="payment-card">
-      <div class="payment-amount" id="payment-amount-display">Rp 25.000</div>
+      <div class="payment-amount" id="payment-amount-display">Rp 5.000</div>
       <div class="payment-qr-wrapper">
         <img id="payment-qr-img" src="" alt="QRIS Code">
         <div id="payment-spinner" class="spinner"></div>
@@ -5867,14 +6203,14 @@ def ensure_directories():
             qr = qrcode.QRCode(version=None,
                                error_correction=qrcode.constants.ERROR_CORRECT_M,
                                box_size=10, border=4)
-            qr.add_data(f"RENCANA-TUHAN-STUDIO-MANUAL-QRIS:{uuid.uuid4().hex[:6]}")
+            qr.add_data(QRIS_RAW_DATA)
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
             img = img.resize((600, 600), Image.NEAREST)
             img.save(str(qris_path))
-            print(f"[ASSET] Generated placeholder QRIS at {qris_path}")
+            print(f"[ASSET] Generated QRIS code at {qris_path}")
         except Exception as e:
-            print(f"[ASSET] Could not generate QRIS placeholder: {e}")
+            print(f"[ASSET] Could not generate QRIS: {e}")
 
 def startup():
     print("=" * 64)
@@ -5890,7 +6226,22 @@ def startup():
     threading.Thread(target=auto_reset_watchdog, daemon=True, name="Watchdog").start()
     threading.Thread(target=camera_hotplug_watchdog, daemon=True, name="CameraHotplug").start()
 
-    print(f"[SERVER] Starting on http://127.0.0.1:5000")
+    import socket
+    local_ips = []
+    try:
+        hostname = socket.gethostname()
+        for ip in socket.gethostbyname_ex(hostname)[2]:
+            if not ip.startswith("127."):
+                local_ips.append(ip)
+    except Exception:
+        pass
+
+    print(f"[SERVER] Kiosk Local : http://127.0.0.1:5000")
+    if local_ips:
+        for ip in local_ips:
+            print(f"[SERVER] Kasir HP Link: http://{ip}:5000/cashier")
+    else:
+        print(f"[SERVER] Kasir HP Link: http://<IP_LAPTOP>:5000/cashier")
     print(f"[SERVER] Press F10 in browser for Admin Settings")
     print(f"[SERVER] Active Camera: {camera.device_name} ({camera.backend})")
     print(f"[SERVER] Demo mode: {config['demo_mode']}")
@@ -5903,7 +6254,7 @@ def startup():
 if __name__ == "__main__":
     startup()
     app.run(
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=5000,
         debug=False,
         threaded=True,
