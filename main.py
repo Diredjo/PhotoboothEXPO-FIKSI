@@ -222,8 +222,8 @@ MIDTRANS_BASE_URL = "https://api.sandbox.midtrans.com" if not MIDTRANS_IS_PRODUC
 
 # ---- PRINTER ----
 PRINTER_NAME = ""             # Empty string = system default printer
-PRINT_WIDTH_MM = 100          # 4R paper width
-PRINT_HEIGHT_MM = 150         # 4R paper height
+PRINT_WIDTH_MM = 297          # A4 paper width (landscape: 297mm)
+PRINT_HEIGHT_MM = 210         # A4 paper height (landscape: 210mm)
 PRINT_DPI = 300               # Print resolution
 AUTO_PRINT = False            # Auto-print after compositing without confirmation
 PRINT_FALLBACK_SEC = 60       # After this many seconds in PRINTING, show Back/Next escape
@@ -329,6 +329,7 @@ class SessionState:
     PAYMENT = "payment"
     FRAMES = "frames"
     COMPOSITING = "compositing"
+    PREVIEW = "preview"
     QR = "qr"
     PRINTING = "printing"
     SUCCESS = "success"
@@ -340,6 +341,7 @@ class AppSession:
         self.photos: List[str] = []             # Captured photo file paths
         self.selected_frame: Optional[str] = None
         self.final_image_path: Optional[str] = None
+        self.a4_image_path: Optional[str] = None # A4 landscape print layout (3 strips horizontal)
         self.cloud_download_url: Optional[str] = None
         self.retake_slot_target: Optional[int] = None # 1, 2, or 3 if single-slot retake in progress
         self.payment_state: str = "idle"        # idle, creating, pending, success, failed, expired
@@ -362,6 +364,7 @@ class AppSession:
         self.photos = []
         self.selected_frame = None
         self.final_image_path = None
+        self.a4_image_path = None
         self.cloud_download_url = None
         self.retake_slot_target = None
         self.payment_state = "idle"
@@ -397,6 +400,9 @@ class AppSession:
             "photos_needed": 3,
             "selected_frame": self.selected_frame,
             "final_image_path": self.final_image_path,
+            "has_final": bool(self.final_image_path and os.path.exists(self.final_image_path)),
+            "a4_image_path": self.a4_image_path,
+            "has_a4": bool(self.a4_image_path and os.path.exists(self.a4_image_path)),
             "cloud_download_url": self.cloud_download_url,
             "payment_state": self.payment_state,
             "payment_order_id": self.payment_order_id,
@@ -1771,18 +1777,41 @@ class PrinterManager:
             try:
                 import win32ui
                 import win32con
+                import win32gui
                 from PIL import ImageWin
 
                 img = Image.open(image_path)
-                hdc = win32ui.CreateDC()
-                hdc.CreatePrinterDC(target_printer)
-                hdc.StartDoc(f"Photo Booth - {Path(image_path).name}")
+                iw, ih = img.size
+
+                # Configure printer DEVMODE for Landscape A4
+                hdc = None
+                try:
+                    hPrinter = win32print.OpenPrinter(target_printer)
+                    try:
+                        devmode = win32print.GetPrinter(hPrinter, 2)['pDevMode']
+                        devmode.Orientation = win32con.DMORIENT_LANDSCAPE
+                        devmode.PaperSize = win32con.DMPAPER_A4
+                        devmode.Fields = devmode.Fields | win32con.DM_ORIENTATION | win32con.DM_PAPERSIZE
+                        hdc_handle = win32gui.CreateDC('WINSPOOL', target_printer, devmode)
+                        hdc = win32ui.CreateDCFromHandle(hdc_handle)
+                        print(f"[PRINT] Initialized DC with Landscape DEVMODE on {target_printer}")
+                    finally:
+                        try:
+                            win32print.ClosePrinter(hPrinter)
+                        except Exception:
+                            pass
+                except Exception as dce:
+                    print(f"[PRINT WARN] DevMode landscape init failed ({dce}), fallback to default DC")
+                    hdc = win32ui.CreateDC()
+                    hdc.CreatePrinterDC(target_printer)
+
+                hdc.StartDoc(f"Photo Booth A4 - {Path(image_path).name}")
                 hdc.StartPage()
 
                 pw = hdc.GetDeviceCaps(win32con.HORZRES)
                 ph = hdc.GetDeviceCaps(win32con.VERTRES)
 
-                iw, ih = img.size
+                # Fit to page preserving aspect ratio
                 scale = min(pw / iw, ph / ih)
                 nw, nh = int(iw * scale), int(ih * scale)
                 ox, oy = (pw - nw) // 2, (ph - nh) // 2
@@ -1793,7 +1822,7 @@ class PrinterManager:
                 hdc.EndPage()
                 hdc.EndDoc()
                 hdc.DeleteDC()
-                print(f"[PRINT] Printed successfully to {target_printer}")
+                print(f"[PRINT] A4 printed successfully to {target_printer} ({pw}x{ph})")
                 return True, f"Printed to {target_printer}"
             except Exception as e:
                 err = f"Windows print error: {e}"
@@ -1809,8 +1838,8 @@ class PrinterManager:
                 return False, f"Fallback print failed: {e}"
 
     def test_print(self) -> Tuple[bool, str]:
-        img = Image.new("RGB", (600, 900), color=(255, 255, 255))
-        test_path = str(PHOTOS_DIR / "test_print.jpg")
+        img = Image.new("RGB", (3508, 2480), color=(255, 255, 255))
+        test_path = str(PHOTOS_DIR / "test_print_a4.jpg")
         img.save(test_path, quality=90)
         ok, msg = self.print_image(test_path)
         try:
@@ -1970,6 +1999,62 @@ class FrameManager:
         final_rgb.save(out_path, quality=config["photo_jpeg_quality"], optimize=True)
         print(f"[FRAME] Final composite saved: {out_path} ({total_w}x{total_h})")
         return out_path
+
+    def generate_a4_sheet(self, single_composite_path: str, session_id: str) -> Optional[str]:
+        """
+        Creates an A4 Landscape print sheet (3508 x 2480 px @ 300 DPI) containing
+        1 single vertical photostrip positioned at the left edge (mepet di sebelah kiri)
+        with a dashed cutting guide line, saving paper and ink so the remaining paper can be reused.
+        """
+        if not single_composite_path or not os.path.exists(single_composite_path):
+            print(f"[A4 COMPOSITE ERROR] Single strip not found: {single_composite_path}")
+            return None
+        try:
+            from PIL import ImageDraw
+            with Image.open(single_composite_path) as strip_img:
+                strip = strip_img.convert("RGB")
+
+            # Standard A4 Landscape at 300 DPI: 297mm x 210mm -> 3508 x 2480 px
+            canvas_w, canvas_h = 3508, 2480
+            a4 = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
+
+            # Scaled strip height: 2400 px (40px margin top and bottom)
+            target_h = 2400
+            scale = target_h / strip.height
+            target_w = int(strip.width * scale)
+
+            strip_resized = strip.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+            # 1 strip positioned on the LEFT side (40px safe margin from left edge)
+            x_pos = 40
+            y_pos = (canvas_h - target_h) // 2
+
+            a4.paste(strip_resized, (x_pos, y_pos))
+
+            # Draw subtle cutting guide line right after the strip
+            draw = ImageDraw.Draw(a4)
+            cut_x = x_pos + target_w + 25
+
+            dash_len = 28
+            gap_len = 16
+            y = 12
+            while y < canvas_h - 12:
+                y_end = min(y + dash_len, canvas_h - 12)
+                draw.line([(cut_x, y), (cut_x, y_end)], fill=(200, 205, 215), width=3)
+                y += dash_len + gap_len
+
+            # Draw subtle cut markers at top and bottom margins
+            draw.line([(cut_x - 16, 25), (cut_x + 16, 25)], fill=(160, 168, 180), width=2)
+            draw.line([(cut_x - 16, canvas_h - 25), (cut_x + 16, canvas_h - 25)], fill=(160, 168, 180), width=2)
+
+            out_name = f"{session_id}_a4_landscape.jpg"
+            out_path = str(PHOTOS_DIR / out_name)
+            a4.save(out_path, quality=config["photo_jpeg_quality"], optimize=True)
+            print(f"[FRAME] A4 Landscape sheet saved: {out_path} ({canvas_w}x{canvas_h}) with 1 strip left")
+            return out_path
+        except Exception as e:
+            print(f"[A4 COMPOSITE ERROR] Failed to create A4 sheet: {e}")
+            return None
 
     def generate_preview(self, frame_filename: str, photo_paths: List[str]) -> Optional[str]:
         """Low-resolution preview for interactive frame selection."""
@@ -2179,8 +2264,12 @@ class SessionController:
             self.transition(SessionState.FRAMES)
             return
         out_path = frame_manager.composite(frame_file, photo_paths)
+        a4_path = None
+        if out_path:
+            a4_path = frame_manager.generate_a4_sheet(out_path, session.session_id)
         with session_lock:
             session.final_image_path = out_path
+            session.a4_image_path = a4_path
 
         # Upload composite image to Cloudinary with auto-download attachment flag
         if out_path and CLOUDINARY_AVAILABLE:
@@ -2205,7 +2294,7 @@ class SessionController:
                 print(f"[CLOUD ERROR] Upload to Cloudinary failed: {e}")
 
         if out_path:
-            self.transition(SessionState.QR)
+            self.transition(SessionState.PREVIEW)
         else:
             self.transition(SessionState.FRAMES)
 
@@ -2221,11 +2310,11 @@ class SessionController:
         with session_lock:
             session.print_state = "cancelled"
             # Keep print_started_mono so elapsed keeps displaying; state drives UI.
-        self.transition(SessionState.QR)
+        self.transition(SessionState.PREVIEW)
 
     def _do_print(self):
         with session_lock:
-            fpath = session.final_image_path
+            fpath = session.a4_image_path or session.final_image_path
         if not fpath or not os.path.exists(fpath):
             with session_lock:
                 session.print_state = "failed"
@@ -2728,8 +2817,24 @@ def api_action():
             return jsonify({"ok": False, "error": "No frame selected"})
 
     elif action == "print_photo":
-        if session.state in (SessionState.QR, SessionState.PRINTING):
+        if session.state in (SessionState.PREVIEW, SessionState.QR, SessionState.PRINTING):
             ctrl.print_photo()
+            return jsonify({"ok": True})
+
+    elif action == "back_to_frames":
+        if session.state in (SessionState.PREVIEW, SessionState.QR):
+            ctrl.transition(SessionState.FRAMES)
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Cannot back to frames from current state"})
+
+    elif action == "show_qr":
+        if session.state == SessionState.PREVIEW:
+            ctrl.transition(SessionState.QR)
+            return jsonify({"ok": True})
+
+    elif action == "back_to_preview":
+        if session.state == SessionState.QR:
+            ctrl.transition(SessionState.PREVIEW)
             return jsonify({"ok": True})
 
     elif action == "back_from_print":
@@ -2739,7 +2844,7 @@ def api_action():
         return jsonify({"ok": False, "error": "Not printing"})
 
     elif action == "skip_print":
-        if session.state in (SessionState.QR, SessionState.PRINTING):
+        if session.state in (SessionState.PREVIEW, SessionState.QR, SessionState.PRINTING):
             ctrl.go_success()
             return jsonify({"ok": True})
 
@@ -2884,6 +2989,30 @@ def api_photo_preview(idx: int):
     if not path or not os.path.exists(path):
         abort(404)
     return send_file(path, mimetype="image/jpeg")
+
+@app.route("/api/a4_preview")
+def api_a4_preview():
+    with session_lock:
+        path = session.a4_image_path
+    if path and os.path.exists(path):
+        resp = send_file(path, mimetype="image/jpeg")
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
+    abort(404)
+
+@app.route("/api/final_photo")
+def api_final_photo():
+    with session_lock:
+        path = session.final_image_path
+    if path and os.path.exists(path):
+        resp = send_file(path, mimetype="image/jpeg")
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
+    abort(404)
 
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
@@ -3931,6 +4060,227 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   to { transform: rotate(360deg); }
 }
 
+/* LIVE PREVIEW SCREEN (A4 LANDSCAPE & SINGLE STRIP) */
+#screen-preview {
+  background: var(--col-bg);
+  padding: 16px 28px;
+  gap: 12px;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  height: 100vh;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+#screen-preview.active {
+  display: flex;
+}
+
+.preview-header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.preview-mode-switch {
+  display: flex;
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-full);
+  padding: 4px;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.preview-tab {
+  background: transparent;
+  border: none;
+  color: var(--col-text-muted);
+  padding: 7px 18px;
+  border-radius: var(--r-full);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--tr-fast);
+}
+
+.preview-tab:hover, .preview-tab.hovered {
+  color: var(--col-text);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.preview-tab.active {
+  background: var(--grad-blue);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.preview-stage-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 960px;
+  height: 56vh;
+  position: relative;
+  margin: 4px 0;
+}
+
+.preview-paper {
+  position: relative;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  transition: transform var(--tr-fast), box-shadow var(--tr-fast);
+}
+
+.preview-paper.single-strip {
+  aspect-ratio: 1623 / 3557;
+  height: 100%;
+}
+
+.preview-paper img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.preview-loader {
+  position: absolute;
+  inset: 0;
+  background: var(--col-surface);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--col-text-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  z-index: 2;
+}
+
+.preview-cut-badge {
+  position: absolute;
+  bottom: 8px;
+  background: rgba(17, 24, 39, 0.85);
+  color: #f3f4f6;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+
+.preview-actions {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.btn-print-cta {
+  padding: 16px 40px;
+  font-size: var(--text-base);
+  font-weight: 800;
+  background: var(--grad-yellow);
+  color: #111318;
+  box-shadow: 0 0 25px rgba(253, 192, 15, 0.5), var(--shadow-yellow);
+  animation: pulse-print-cta 2.5s infinite ease-in-out;
+}
+
+@keyframes pulse-print-cta {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(253, 192, 15, 0.4), var(--shadow-yellow);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(253, 192, 15, 0.8), 0 0 10px rgba(255, 255, 255, 0.5);
+    transform: scale(1.02);
+  }
+}
+
+.preview-hint {
+  font-size: var(--text-xs);
+  color: var(--col-text-3);
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+/* PREVIEW QR MODAL */
+.preview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.preview-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+}
+
+.preview-modal-card {
+  position: relative;
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-xl);
+  padding: 32px 40px;
+  box-shadow: var(--shadow-lg), 0 24px 60px rgba(0,0,0,0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  max-width: 420px;
+  width: 100%;
+  z-index: 1;
+  animation: modal-pop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modal-pop {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.modal-close-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--col-border);
+  color: var(--col-text);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--tr-fast);
+}
+
+.modal-close-btn:hover, .modal-close-btn.hovered {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: var(--col-danger);
+  color: var(--col-danger);
+}
+
 /* QR DOWNLOAD SCREEN */
 #screen-qr {
   background: var(--col-bg);
@@ -4869,6 +5219,72 @@ body.dark-mode .settings-footer .btn-ghost:hover {
     <p style="color: var(--col-text-2);">Applying frame styling and optimizing print colors.</p>
   </div>
 
+  <!-- LIVE PREVIEW SCREEN (SINGLE STRIP FRAME) -->
+  <div class="screen" id="screen-preview">
+    <div class="preview-header">
+      <div class="brand-badge">Live Preview Foto</div>
+      <h2 style="font-size: var(--text-2xl); font-weight: 800; margin: 4px 0 0 0;">Preview Hasil Foto Anda</h2>
+      <p style="color: var(--col-text-2); font-size: var(--text-sm); margin: 0;">
+        Periksa hasil foto Anda di bawah ini sebelum dicetak.
+      </p>
+    </div>
+
+    <!-- Preview Stage / Single Strip Paper Mockup -->
+    <div class="preview-stage-container">
+      <div class="preview-paper single-strip" id="preview-paper-strip">
+        <div class="preview-loader" id="preview-sheet-loader">
+          <div class="spinner"></div>
+          <span>Menyiapkan Preview Foto...</span>
+        </div>
+        <img id="preview-sheet-img" src="" alt="Photo Strip Preview" onload="onPreviewImgLoaded('sheet')">
+        <div class="preview-cut-badge">✨ Siap Dicetak (1 Lembar Strip)</div>
+      </div>
+    </div>
+
+    <!-- Action Bar Buttons -->
+    <div class="preview-actions">
+      <button class="btn btn-ghost btn-interactive" onclick="doAction('back_to_frames')" title="Kembali ke pemilihan frame">
+        <span>🖼️ Ubah Frame</span>
+      </button>
+      <button class="btn btn-secondary btn-interactive" onclick="openDownloadModal()" title="Download foto ke HP lewat QR Code">
+        <span>📱 Scan QR / Download</span>
+      </button>
+      <button class="btn btn-primary btn-interactive btn-print-cta" onclick="doAction('print_photo')" title="Cetak langsung ke printer EPSON A4">
+        <span style="font-size: 20px;">🖨️</span>
+        <span>Cetak Sekarang (Print)</span>
+      </button>
+    </div>
+
+    <div class="preview-hint">
+      Arahkan kursor & kepalkan tangan (✊) atau tahan pose Peace (✌️) untuk memilih
+    </div>
+
+    <!-- Quick Download Modal -->
+    <div id="preview-qr-modal" class="preview-modal" style="display: none;">
+      <div class="preview-modal-backdrop" onclick="closeDownloadModal()"></div>
+      <div class="preview-modal-card">
+        <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+          <div class="brand-badge" style="margin:0;">Download Digital</div>
+          <button class="btn-interactive modal-close-btn" onclick="closeDownloadModal()">✕</button>
+        </div>
+        <h3 style="font-size: var(--text-xl); font-weight: 800; margin: 8px 0 0 0;">Scan QR untuk Unduh Foto</h3>
+        <p style="color: var(--col-text-2); font-size: var(--text-xs); margin: 0; text-align: center;">
+          Scan dengan kamera HP untuk download foto resolusi tinggi
+        </p>
+        <div class="payment-qr-wrapper" style="margin: 8px 0;">
+          <img id="modal-qr-img" src="" alt="Download QR">
+          <div id="modal-qr-loading" class="spinner"></div>
+        </div>
+        <div id="modal-qr-cloud-badge" style="font-size: var(--text-xs); color: #22c55e; font-weight: 600; display: none;">
+          ⚡ Direct Download Ready (Auto-download)
+        </div>
+        <button class="btn btn-primary btn-interactive" onclick="closeDownloadModal()" style="margin-top: 6px; padding: 12px 28px;">
+          Tutup & Kembali ke Preview
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- QR DOWNLOAD SCREEN -->
   <div class="screen" id="screen-qr">
     <div class="brand-badge">Download & Print</div>
@@ -4881,7 +5297,8 @@ body.dark-mode .settings-footer .btn-ghost:hover {
       <div id="final-qr-cloud-badge" style="font-size: var(--text-xs); color: #22c55e; font-weight: 600; margin-top: 4px; display: none;">
         ✨ Direct Download Ready (Auto-download on scan)
       </div>
-      <div style="display: flex; gap: 16px; margin-top: 12px;">
+      <div style="display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; justify-content: center;">
+        <button class="btn btn-ghost btn-interactive" onclick="doAction('back_to_preview')">← Preview Cetak</button>
         <button class="btn btn-secondary btn-interactive" onclick="doAction('print_photo')">🖨 Print Photo</button>
         <button class="btn btn-primary btn-interactive" onclick="doAction('go_success')">Done ✓</button>
       </div>
@@ -5657,11 +6074,14 @@ function transitionToScreen(name) {
   target.classList.add('active');
 
   if (appState.screen === 'payment' && name !== 'payment') resetF9();
+  if (name === 'preview') loadLivePreview();
   if (name === 'qr' && !qrLoaded) loadFinalQR();
   if (name === 'payment') initPaymentScreen();
   if (name === 'success') startSuccessCountdown();
   if (name === 'landing') {
     qrLoaded = false;
+    livePreviewLoaded = false;
+    closeDownloadModal();
     framePreviewsLoaded = {};
     if (successTimerInterval) {
       clearInterval(successTimerInterval);
@@ -5906,6 +6326,60 @@ function selectFrame(filename) {
     btn.style.opacity = '1';
   }
   doAction('select_frame', {filename});
+}
+
+// ============================================================
+// LIVE PRINT PREVIEW (SINGLE STRIP FRAME)
+// ============================================================
+let livePreviewLoaded = false;
+
+function loadLivePreview() {
+  const sheetImg = document.getElementById('preview-sheet-img');
+  const sheetLoader = document.getElementById('preview-sheet-loader');
+  if (sheetLoader) sheetLoader.style.display = 'flex';
+  if (sheetImg) {
+    sheetImg.src = '/api/final_photo?t=' + Date.now();
+  }
+  // Preload QR in background so download modal is instant
+  loadFinalQR();
+}
+
+function onPreviewImgLoaded(type) {
+  if (type === 'sheet') {
+    const loader = document.getElementById('preview-sheet-loader');
+    if (loader) loader.style.display = 'none';
+  } else if (type === 'strip') {
+    const loader = document.getElementById('preview-strip-loader');
+    if (loader) loader.style.display = 'none';
+  }
+}
+
+function openDownloadModal() {
+  const modal = document.getElementById('preview-qr-modal');
+  if (modal) {
+    modal.style.display = 'flex';
+    loadModalQR();
+  }
+}
+
+function closeDownloadModal() {
+  const modal = document.getElementById('preview-qr-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function loadModalQR() {
+  try {
+    const res = await fetch('/api/final_qr');
+    const data = await res.json();
+    if (data.ok && data.qr_b64) {
+      const mImg = document.getElementById('modal-qr-img');
+      const mLoad = document.getElementById('modal-qr-loading');
+      const mCloud = document.getElementById('modal-qr-cloud-badge');
+      if (mImg) mImg.src = 'data:image/png;base64,' + data.qr_b64;
+      if (mLoad) mLoad.style.display = 'none';
+      if (mCloud) mCloud.style.display = data.is_cloud ? 'block' : 'none';
+    }
+  } catch(e) {}
 }
 
 async function loadFinalQR() {
@@ -6162,6 +6636,8 @@ function handlePeaceAction() {
     doAction('use_photos');
   } else if (appState.screen === 'frames') {
     if (appState.selectedFrame) doAction('confirm_frame');
+  } else if (appState.screen === 'preview') {
+    doAction('print_photo');
   } else if (appState.screen === 'qr') {
     doAction('go_success');
   } else if (appState.screen === 'success') {
