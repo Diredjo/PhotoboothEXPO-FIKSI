@@ -415,7 +415,7 @@ class AppSession:
         }
 
 session = AppSession()
-session_lock = threading.Lock()
+session_lock = threading.RLock()
 
 # ============================================================
 # GESTURE STATE
@@ -428,7 +428,10 @@ class GestureState:
         self.cursor_raw_x = 0.5
         self.cursor_raw_y = 0.5
         self.fist_start: Optional[float] = None
+        self.last_fist_seen: float = 0.0
         self.peace_start: Optional[float] = None
+        self.last_peace_seen: float = 0.0
+        self.recent_gestures = deque(maxlen=5)
         self.last_click_time: float = 0
         self.primary_user_locked = False
         self.primary_face_bbox: Optional[Tuple] = None  # (x,y,w,h) normalized
@@ -448,7 +451,7 @@ class GestureState:
         self.admin_mode = False
 
 gesture_state = GestureState()
-gesture_lock = threading.Lock()
+gesture_lock = threading.RLock()
 
 # ============================================================
 # CAMERA DEVICE MANAGER
@@ -613,46 +616,53 @@ class CameraDeviceManager:
 
         # Fallback if no devices found via cv2-enumerate-cameras
         if not found:
-            # If camera is already open and running, do NOT probe to avoid disrupting the stream
-            if "camera" in globals() and camera.running and camera.cap is not None:
-                if camera.device_id in self._devices:
+            # If camera engine is initialized/running or we already know devices, reuse safely
+            if "camera" in globals() and camera.running:
+                if camera.device_id and camera.device_id in self._devices:
                     found.append(self._devices[camera.device_id])
+                elif self._devices:
+                    found.extend(list(self._devices.values()))
                 else:
                     found.append(CameraDeviceInfo(
                         device_id="cam_default",
-                        name=camera.device_name or "Integrated Camera",
+                        name=camera.device_name if camera.device_name != "Unknown" else "Integrated Camera",
                         native_index=0,
                         backend_name=camera.backend or "DirectShow",
                         is_builtin=True,
                         dshow_index=0,
                         device_type="built-in"
                     ))
+            elif self._devices:
+                found.extend(list(self._devices.values()))
             else:
-                # Safe probe of index 0
-                cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-                if cap.isOpened():
-                    cap.release()
-                    found.append(CameraDeviceInfo(
-                        device_id="cam_idx_0",
-                        name="Integrated Camera",
-                        native_index=0,
-                        backend_name="DirectShow",
-                        is_builtin=True,
-                        dshow_index=0,
-                        device_type="built-in"
-                    ))
-                else:
-                    cap = cv2.VideoCapture(0)
+                # One-time startup probe of index 0 only when engine has NOT started
+                try:
+                    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
                     if cap.isOpened():
                         cap.release()
                         found.append(CameraDeviceInfo(
                             device_id="cam_idx_0",
-                            name="Webcam 0",
+                            name="Integrated Camera",
                             native_index=0,
-                            backend_name="Auto",
+                            backend_name="DirectShow",
                             is_builtin=True,
+                            dshow_index=0,
                             device_type="built-in"
                         ))
+                    else:
+                        cap = cv2.VideoCapture(0)
+                        if cap.isOpened():
+                            cap.release()
+                            found.append(CameraDeviceInfo(
+                                device_id="cam_idx_0",
+                                name="Webcam 0",
+                                native_index=0,
+                                backend_name="Auto",
+                                is_builtin=True,
+                                device_type="built-in"
+                            ))
+                except Exception:
+                    pass
 
         def sort_key(d: CameraDeviceInfo):
             if d.is_builtin:
@@ -846,33 +856,44 @@ class CameraEngine:
         if c_any not in open_candidates:
             open_candidates.append(c_any)
 
-        # Try candidates and validate with real frames
-        for cand_idx, cand_backend, cand_bname in open_candidates:
-            for req_w, req_h, req_fps in self.FORMAT_CANDIDATES:
-                cap = None
-                try:
-                    cap = cv2.VideoCapture(cand_idx, cand_backend)
-                    if not cap.isOpened():
-                        if cap:
-                            cap.release()
-                        break  # Backend rejected device index, proceed to next candidate
+        # Test candidate open descriptors
+        formats_to_try = [
+            (int(config.get("camera_width", 1280)), int(config.get("camera_height", 720)), int(config.get("camera_fps", 30))),
+            (1280, 720, 30),
+            (640, 480, 30)
+        ]
+        unique_formats = []
+        for fmt in formats_to_try:
+            if fmt not in unique_formats:
+                unique_formats.append(fmt)
 
+        for cand_idx, cand_backend, cand_bname in open_candidates:
+            cap = None
+            try:
+                cap = cv2.VideoCapture(cand_idx, cand_backend)
+                if not cap.isOpened():
+                    if cap:
+                        cap.release()
+                    continue
+
+                for req_w, req_h, req_fps in unique_formats:
                     cap.set(cv2.CAP_PROP_FRAME_WIDTH, req_w)
                     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, req_h)
                     cap.set(cv2.CAP_PROP_FPS, req_fps)
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-                    # Validate by capturing several consecutive real frames
+                    # Quick validation with up to 3 frames
                     valid_frames = 0
                     test_frame = None
-                    for _ in range(5):
+                    for _ in range(3):
                         ret, f = cap.read()
-                        if ret and f is not None and f.size > 0 and f.shape[0] >= 240 and f.shape[1] >= 320:
+                        if ret and f is not None and f.size > 0 and f.shape[0] >= 180 and f.shape[1] >= 240:
                             valid_frames += 1
                             test_frame = f
-                        time.sleep(0.015)
+                            break
+                        time.sleep(0.010)
 
-                    if valid_frames >= 4 and test_frame is not None:
+                    if valid_frames >= 1 and test_frame is not None:
                         self.cap = cap
                         self.actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or test_frame.shape[1]
                         self.actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or test_frame.shape[0]
@@ -897,16 +918,16 @@ class CameraEngine:
                         }
                         print(f"[CAMERA] Connected: {dev.name} ({self.actual_width}x{self.actual_height} @ {self.fps:.0f} FPS, {self.backend})")
                         return True
-                    else:
+
+                cap.release()
+            except Exception as ex:
+                if cap:
+                    try:
                         cap.release()
-                except Exception as ex:
-                    if cap:
-                        try:
-                            cap.release()
-                        except Exception:
-                            pass
-                    if config.get("debug_mode"):
-                        print(f"[CAMERA DEBUG] Candidate probe error ({cand_bname}:{cand_idx}): {ex}")
+                    except Exception:
+                        pass
+                if config.get("debug_mode"):
+                    print(f"[CAMERA DEBUG] Candidate probe error ({cand_bname}:{cand_idx}): {ex}")
 
         self.error = f"Camera '{dev.name}' failed format and frame capture validation."
         self.camera_status = "DISCONNECTED"
@@ -965,7 +986,6 @@ class CameraEngine:
                     self._logged_unhealthy = False
                     print(f"[CAMERA] Camera recovered: {self.device_name}")
                 else:
-                    camera_device_manager.refresh_devices()
                     dev = camera_device_manager.find_device(self.device_id)
                     if not dev:
                         self.camera_status = "DISCONNECTED"
@@ -975,23 +995,25 @@ class CameraEngine:
             ret, frame = self.cap.read()
             if not ret or frame is None or frame.size == 0 or frame.shape[0] < 100:
                 self.consecutive_failures += 1
-                if self.consecutive_failures <= 2:
-                    time.sleep(0.015)
+                if self.consecutive_failures <= 3:
+                    time.sleep(0.02)
                     continue
-                elif self.consecutive_failures in (3, 4):
+                elif self.consecutive_failures <= 8:
                     self.camera_status = "DEGRADED"
                     self.ready = False
                     if not self._logged_unhealthy:
                         print(f"[CAMERA] Stream degraded: frame read failed ({self.device_name})")
                         self._logged_unhealthy = True
-                    time.sleep(0.025)
+                    time.sleep(0.05)
                     continue
                 else:
-                    print(f"[CAMERA] {self.consecutive_failures} consecutive failures, reconnecting {self.device_name}...")
+                    if not self._logged_unhealthy:
+                        print(f"[CAMERA] Frame read lost, reconnecting {self.device_name}...")
+                        self._logged_unhealthy = True
                     self.camera_status = "RECONNECTING"
                     self.ready = False
                     self._release_cap()
-                    self._backoff_idx = 0
+                    time.sleep(0.4)
                     continue
 
             if self.consecutive_failures > 0:
@@ -1151,7 +1173,7 @@ class GestureEngine:
             with camera.frame_lock:
                 seq = camera.frame_sequence
             if seq == self._last_frame_seq:
-                time.sleep(0.001)
+                time.sleep(0.006)
                 continue
             self._last_frame_seq = seq
 
@@ -1177,8 +1199,7 @@ class GestureEngine:
                     gesture_state.inference_ms = infer_ms
                     gesture_state.loop_fps = fps
 
-            # No fixed sleep: loop throttles naturally via inference cost + latest-frame gate.
-            time.sleep(0.001)
+            time.sleep(0.004)
 
     def _process_frame(self, frame: np.ndarray):
         h, w = frame.shape[:2]
@@ -1344,27 +1365,47 @@ class GestureEngine:
             gesture_state.cursor_x += smth * (raw_x - gesture_state.cursor_x)
             gesture_state.cursor_y += smth * (raw_y - gesture_state.cursor_y)
 
-            # Classify gesture with robust geometry
-            gesture = self._classify_gesture(landmarks)
-            gesture_state.current_gesture = gesture
+            # Classify raw gesture with 3D joint geometry
+            raw_gesture = self._classify_gesture(landmarks)
+            gesture_state.recent_gestures.append(raw_gesture)
 
-            # Peace timing
+            # Majority filter (3 of last 5 frames) to absorb momentary sensor noise
+            fist_count = sum(1 for g in gesture_state.recent_gestures if g == "fist")
+            peace_count = sum(1 for g in gesture_state.recent_gestures if g == "peace")
+            palm_count = sum(1 for g in gesture_state.recent_gestures if g == "palm")
+
+            if fist_count >= 3:
+                effective_gesture = "fist"
+            elif peace_count >= 3:
+                effective_gesture = "peace"
+            elif palm_count >= 3:
+                effective_gesture = "palm"
+            else:
+                effective_gesture = raw_gesture
+
+            gesture_state.current_gesture = effective_gesture
+
+            # Peace timing with 220ms drop debounce
             peace_thresh = config["peace_threshold_ms"] / 1000.0
-            if gesture == "peace":
+            if effective_gesture == "peace":
                 if gesture_state.peace_start is None:
                     gesture_state.peace_start = now
+                gesture_state.last_peace_seen = now
                 elapsed = now - gesture_state.peace_start
                 gesture_state.peace_progress = min(1.0, elapsed / peace_thresh)
             else:
-                gesture_state.peace_start = None
-                gesture_state.peace_progress = 0.0
+                if now - gesture_state.last_peace_seen > 0.22:
+                    gesture_state.peace_start = None
+                    gesture_state.peace_progress = 0.0
 
-            # Fist timing
-            if gesture == "fist":
+            # Fist timing with 180ms drop debounce
+            if effective_gesture == "fist":
                 if gesture_state.fist_start is None:
                     gesture_state.fist_start = now
+                gesture_state.last_fist_seen = now
             else:
-                gesture_state.fist_start = None
+                if now - gesture_state.last_fist_seen > 0.18:
+                    gesture_state.fist_start = None
 
     def _associate_hand_with_primary(self, hand_result):
         """
@@ -1444,30 +1485,36 @@ class GestureEngine:
 
     def _classify_gesture(self, landmarks) -> str:
         """
-        Robust gesture classification using 2D Euclidean distances,
-        joint flexion/extension ratios, and fingertip-to-palm geometry.
-        Invariant to arbitrary in-plane hand rotations.
+        Robust gesture classification using 3D Euclidean distances and
+        finger joint flexion/extension ratios. Invariant to hand rotation and perspective.
         """
-        def dist(p1, p2):
+        def dist_3d(p1, p2):
+            z1 = getattr(p1, "z", 0.0)
+            z2 = getattr(p2, "z", 0.0)
+            return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2 + (z1 - z2)**2)
+
+        def dist_2d(p1, p2):
             return math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2)
 
         wrist = landmarks[0]
-        palm_center_x = (landmarks[0].x + landmarks[9].x) / 2
-        palm_center_y = (landmarks[0].y + landmarks[9].y) / 2
-        class P:
-            def __init__(self, x, y):
+        palm_x = (landmarks[0].x + landmarks[9].x) / 2
+        palm_y = (landmarks[0].y + landmarks[9].y) / 2
+        palm_z = (getattr(landmarks[0], "z", 0.0) + getattr(landmarks[9], "z", 0.0)) / 2
+
+        class Point3D:
+            def __init__(self, x, y, z):
                 self.x = x
                 self.y = y
-        palm = P(palm_center_x, palm_center_y)
+                self.z = z
 
-        palm_scale = max(dist(wrist, landmarks[9]), 0.01)
+        palm = Point3D(palm_x, palm_y, palm_z)
 
-        # Fingers: index=8/6/5, middle=12/10/9, ring=16/14/13, pinky=20/18/17
+        # 4 fingers: Index (8,6,5), Middle (12,10,9), Ring (16,14,13), Pinky (20,18,17)
         finger_indices = [
-            (8, 6, 5),   # Index
-            (12, 10, 9), # Middle
-            (16, 14, 13),# Ring
-            (20, 18, 17) # Pinky
+            (8, 6, 5),    # Index
+            (12, 10, 9),  # Middle
+            (16, 14, 13), # Ring
+            (20, 18, 17)  # Pinky
         ]
 
         extended = []
@@ -1478,38 +1525,43 @@ class GestureEngine:
             pip = landmarks[pip_idx]
             mcp = landmarks[mcp_idx]
 
-            d_tip_wrist = dist(tip, wrist)
-            d_pip_wrist = dist(pip, wrist)
-            d_tip_palm = dist(tip, palm)
-            d_pip_palm = dist(pip, palm)
+            d_tip_wrist = dist_3d(tip, wrist)
+            d_pip_wrist = dist_3d(pip, wrist)
+            d_tip_mcp = dist_3d(tip, mcp)
+            d_pip_mcp = max(dist_3d(pip, mcp), 0.01)
+            d_tip_palm = dist_3d(tip, palm)
+            d_pip_palm = max(dist_3d(pip, palm), 0.01)
 
-            # Extended if tip is clearly further from wrist/palm than pip
-            is_ext = (d_tip_wrist > 1.25 * d_pip_wrist) and (d_tip_palm > 1.20 * d_pip_palm)
-            # Folded if tip is close to palm/wrist
-            is_fld = (d_tip_wrist < 1.12 * d_pip_wrist) or (d_tip_palm < 1.05 * d_pip_palm)
+            # Extended: fingertip is clearly extended outward away from wrist and MCP
+            is_ext = (d_tip_wrist > 1.18 * d_pip_wrist) and (d_tip_mcp > 1.35 * d_pip_mcp)
+
+            # Folded: fingertip curled inward towards MCP / palm / wrist
+            is_fld = (not is_ext) and (
+                (d_tip_mcp < 1.30 * d_pip_mcp) or
+                (d_tip_wrist < 1.15 * d_pip_wrist) or
+                (d_tip_palm < 1.15 * d_pip_palm)
+            )
 
             extended.append(is_ext)
             folded.append(is_fld)
 
-        # Thumb (4, 3, 2)
-        thumb_tip = landmarks[4]
-        pinky_mcp = landmarks[17]
-        thumb_extended = dist(thumb_tip, pinky_mcp) > 1.3 * dist(landmarks[3], pinky_mcp)
-
-        num_ext = sum(extended)
-        num_fld = sum(folded)
+        num_ext = sum(1 for e in extended if e)
+        num_fld = sum(1 for f in folded if f)
 
         # PEACE: Index + Middle extended, Ring + Pinky folded
         if extended[0] and extended[1] and folded[2] and folded[3]:
-            return "peace"
+            # Ensure index and middle tips have natural separation
+            d_index_middle = dist_2d(landmarks[8], landmarks[12])
+            if d_index_middle > 0.035:
+                return "peace"
 
-        # PALM: All 4 fingers extended
-        if num_ext >= 4:
-            return "palm"
-
-        # FIST: All 4 fingers folded
-        if num_fld >= 4:
+        # FIST: At least 3 fingers are folded AND 0 fingers are extended
+        if num_fld >= 3 and num_ext == 0:
             return "fist"
+
+        # PALM: At least 3 fingers extended
+        if num_ext >= 3:
+            return "palm"
 
         return "unknown"
 
@@ -2196,9 +2248,12 @@ class SessionController:
 
     def _auto_reset(self, delay: float):
         time.sleep(delay)
+        should_reset = False
         with session_lock:
             if session.state == SessionState.SUCCESS:
-                self.full_reset()
+                should_reset = True
+        if should_reset:
+            self.full_reset()
 
     def full_reset(self):
         print(f"[SESSION] Full reset: {session.session_id}")
@@ -2234,23 +2289,26 @@ def cleanup_old_files():
 def auto_reset_watchdog():
     while True:
         time.sleep(5)
+        should_reset = False
         with session_lock:
             if session.state not in (SessionState.LANDING,):
                 idle = session.idle_seconds()
                 timeout = config["auto_reset_timeout"]
                 if idle > timeout:
                     print(f"[SESSION] Auto-reset idle: {idle:.0f}s")
-                    ctrl.full_reset()
+                    should_reset = True
+        if should_reset:
+            ctrl.full_reset()
 
 def camera_hotplug_watchdog():
     """
     Periodically refreshes camera list to discover plugged / unplugged USB webcams.
-    Runs every 4 seconds lightweight without interrupting stream.
+    Runs every 5.0 seconds lightweight without interrupting stream.
     """
     while True:
-        time.sleep(4.0)
+        time.sleep(5.0)
         try:
-            if CV2_ENUM_AVAILABLE or not camera.is_ok:
+            if camera.camera_status != "RECONNECTING":
                 camera_device_manager.refresh_devices()
         except Exception as e:
             if config.get("debug_mode"):
@@ -2261,69 +2319,74 @@ def camera_hotplug_watchdog():
 # ============================================================
 def generate_video_frames():
     while True:
-        if not camera.is_ok:
-            placeholder = np.ones((360, 640, 3), dtype=np.uint8) * 24
-            status_title = f"CAMERA {camera.camera_status}"
-            if camera.camera_status == "RECONNECTING":
-                sub_text = f"Attempting reconnect... ({camera.reconnect_attempts})"
-            elif camera.camera_status == "DEGRADED":
-                sub_text = "Stream degraded, recovering..."
-            else:
-                sub_text = "Searching for camera..."
-            cv2.putText(placeholder, status_title, (140, 160),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (230, 230, 230), 2)
-            cv2.putText(placeholder, sub_text, (150, 200),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 160, 160), 1)
-            ret, buf = cv2.imencode(".jpg", placeholder, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        try:
+            if not camera.is_ok:
+                placeholder = np.ones((360, 640, 3), dtype=np.uint8) * 24
+                status_title = f"CAMERA {camera.camera_status}"
+                if camera.camera_status == "RECONNECTING":
+                    sub_text = f"Attempting reconnect... ({camera.reconnect_attempts})"
+                elif camera.camera_status == "DEGRADED":
+                    sub_text = "Stream degraded, recovering..."
+                else:
+                    sub_text = "Searching for camera..."
+                cv2.putText(placeholder, status_title, (140, 160),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (230, 230, 230), 2)
+                cv2.putText(placeholder, sub_text, (150, 200),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (160, 160, 160), 1)
+                ret, buf = cv2.imencode(".jpg", placeholder, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                if ret:
+                    yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
+                time.sleep(0.1)
+                continue
+
+            frame = camera.get_frame()
+            if frame is None:
+                time.sleep(0.033)
+                continue
+
+            # Optional overlays in debug
+            if config["show_fps"]:
+                cv2.putText(frame, f"FPS: {camera.fps:.1f}", (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            if config["show_landmarks"]:
+                with gesture_lock:
+                    hbbox = gesture_state.hand_bbox
+                if hbbox:
+                    h, w = frame.shape[:2]
+                    x, y, bw, bh = hbbox
+                    cv2.rectangle(frame,
+                        (int(x * w), int(y * h)),
+                        (int((x + bw) * w), int((y + bh) * h)),
+                        (0, 255, 255), 2)
+
+            if config["show_bounding_box"]:
+                with gesture_lock:
+                    fbox = gesture_state.primary_face_bbox
+                if fbox:
+                    h, w = frame.shape[:2]
+                    x, y, bw, bh = fbox
+                    cv2.rectangle(frame,
+                        (int(x * w), int(y * h)),
+                        (int((x + bw) * w), int((y + bh) * h)),
+                        (0, 255, 0), 2)
+
+            if config["show_gesture_label"]:
+                with gesture_lock:
+                    g = gesture_state.current_gesture
+                cv2.putText(frame, g.upper(), (10, 60),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 255), 2)
+
+            stream_w, stream_h = 640, 360
+            stream_frame = cv2.resize(frame, (stream_w, stream_h))
+            ret, buf = cv2.imencode(".jpg", stream_frame, [cv2.IMWRITE_JPEG_QUALITY, 78])
             if ret:
                 yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
-            time.sleep(0.1)
-            continue
-
-        frame = camera.get_frame()
-        if frame is None:
             time.sleep(0.033)
-            continue
-
-        # Optional overlays in debug
-        if config["show_fps"]:
-            cv2.putText(frame, f"FPS: {camera.fps:.1f}", (10, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-
-        if config["show_landmarks"]:
-            with gesture_lock:
-                hbbox = gesture_state.hand_bbox
-            if hbbox:
-                h, w = frame.shape[:2]
-                x, y, bw, bh = hbbox
-                cv2.rectangle(frame,
-                    (int(x * w), int(y * h)),
-                    (int((x + bw) * w), int((y + bh) * h)),
-                    (0, 255, 255), 2)
-
-        if config["show_bounding_box"]:
-            with gesture_lock:
-                fbox = gesture_state.primary_face_bbox
-            if fbox:
-                h, w = frame.shape[:2]
-                x, y, bw, bh = fbox
-                cv2.rectangle(frame,
-                    (int(x * w), int(y * h)),
-                    (int((x + bw) * w), int((y + bh) * h)),
-                    (0, 255, 0), 2)
-
-        if config["show_gesture_label"]:
-            with gesture_lock:
-                g = gesture_state.current_gesture
-            cv2.putText(frame, g.upper(), (10, 60),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 200, 255), 2)
-
-        stream_w, stream_h = 640, 360
-        stream_frame = cv2.resize(frame, (stream_w, stream_h))
-        ret, buf = cv2.imencode(".jpg", stream_frame, [cv2.IMWRITE_JPEG_QUALITY, 78])
-        if ret:
-            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"
-        time.sleep(0.033)
+        except (GeneratorExit, BrokenPipeError, ConnectionResetError):
+            break
+        except Exception:
+            time.sleep(0.05)
 
 def make_qr_b64(data: str, size: int = 300) -> str:
     qr = qrcode.QRCode(
@@ -4679,7 +4742,7 @@ body.dark-mode .settings-footer .btn-ghost:hover {
   <!-- CAMERA SCREEN -->
   <div class="screen" id="screen-camera">
     <div class="camera-container">
-      <img id="camera-stream" src="/video_feed" alt="Live Feed">
+      <img id="camera-stream" src="/video_feed" alt="Live Feed" onerror="setTimeout(ensureCameraStream, 1500)">
 
       <div class="camera-header-hud">
         <div class="camera-dots">
@@ -5007,7 +5070,7 @@ body.dark-mode .settings-footer .btn-ghost:hover {
           <div class="settings-group">
             <div class="settings-group-title">Live Camera Test</div>
             <div class="camera-test-panel">
-              <img src="/video_feed" alt="Camera Test Preview">
+              <img id="settings-camera-stream" src="" alt="Camera Test Preview">
             </div>
             <div style="font-size: var(--text-xs); color: var(--col-text-2); margin-top: 8px;" id="camera-test-info">
               Checking status...
@@ -5442,7 +5505,10 @@ function startCursorPolling() {
   cursorPollInterval = setInterval(fetchCursor, CURSOR_POLL_MS);
 }
 
+let isFetchingCursor = false;
 async function fetchCursor() {
+  if (isFetchingCursor) return;
+  isFetchingCursor = true;
   try {
     const res = await fetch('/api/cursor');
     if (!res.ok) return;
@@ -5459,7 +5525,11 @@ async function fetchCursor() {
     appState.cameraFps = d.camera_fps;
     updateGestureHUD();
     updateDebugOverlay();
-  } catch (e) {}
+    processGestures(appState.config);
+  } catch (e) {
+  } finally {
+    isFetchingCursor = false;
+  }
 }
 
 function updateDebugOverlay() {
@@ -5479,13 +5549,19 @@ function updateDebugOverlay() {
   set('gdo-cam', `${appState.cameraFps ?? '-'} fps`);
 }
 
+let isFetchingState = false;
 async function fetchState() {
+  if (isFetchingState) return;
+  isFetchingState = true;
   try {
     const res = await fetch('/api/state');
     if (!res.ok) return;
     const data = await res.json();
     updateState(data);
-  } catch (e) {}
+  } catch (e) {
+  } finally {
+    isFetchingState = false;
+  }
 }
 
 function updateState(data) {
@@ -5939,6 +6015,7 @@ function retryCamera() { doAction('retry_camera'); }
 // Explicit fist state machine: 'ARMED', 'PRESSING', 'TRIGGERED', 'WAIT_RELEASE'
 let fistState = 'ARMED';
 let fistPressStart = 0;
+let lastFistSeenTime = 0;
 let lastFistClickTime = 0;
 
 // Explicit peace state machine: 'NONE', 'HOLDING', 'TRIGGERED', 'WAIT_RELEASE'
@@ -6029,10 +6106,11 @@ function processGestures(cfg) {
 
   // Explicit Fist State Machine: ARMED -> PRESSING -> TRIGGERED -> WAIT_RELEASE
   if (g === 'fist') {
+    lastFistSeenTime = now;
     if (fistState === 'ARMED') {
       fistState = 'PRESSING';
       fistPressStart = now;
-      updateCursorProgress(0.05, true);
+      updateCursorProgress(0.08, true);
     } else if (fistState === 'PRESSING') {
       const held = appState.fistStableMs || (now - fistPressStart);
       const ratio = Math.min(1.0, held / clickThresh);
@@ -6048,15 +6126,17 @@ function processGestures(cfg) {
     }
     // While in WAIT_RELEASE and user still holds fist, do not re-trigger!
   } else {
-    // Fist released
-    if (fistState === 'WAIT_RELEASE' || fistState === 'TRIGGERED') {
-      if (now - lastFistClickTime >= cooldown) {
+    // Fist released with 180ms grace period to tolerate momentary dropped polling frames
+    if (now - lastFistSeenTime > 180) {
+      if (fistState === 'WAIT_RELEASE' || fistState === 'TRIGGERED') {
+        if (now - lastFistClickTime >= cooldown) {
+          fistState = 'ARMED';
+          updateCursorProgress(0.0, true);
+        }
+      } else {
         fistState = 'ARMED';
         updateCursorProgress(0.0, true);
       }
-    } else {
-      fistState = 'ARMED';
-      updateCursorProgress(0.0, true);
     }
   }
 }
@@ -6097,35 +6177,89 @@ function handleFistClick() {
     const cursor = document.getElementById('cursor');
     if (cursor) {
       cursor.classList.add('fist-clicked');
-      setTimeout(() => cursor.classList.remove('fist-clicked'), 320);
+      setTimeout(() => cursor.classList.remove('fist-clicked'), 350);
     }
     isGestureDispatching = true;
     try {
-      el.click();
       el.classList.add('hovered', 'gesture-clicked');
-      setTimeout(() => el.classList.remove('gesture-clicked'), 300);
+      setTimeout(() => el.classList.remove('gesture-clicked'), 350);
+
+      if (typeof el.click === 'function') {
+        el.click();
+      } else {
+        el.dispatchEvent(new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: x,
+          clientY: y
+        }));
+      }
     } catch(err) {
       console.error('Gesture click error:', err);
     } finally {
       setTimeout(() => {
         isGestureDispatching = false;
-      }, 60);
+      }, 100);
     }
   }
 }
 
 function getInteractiveAt(x, y) {
-  const candidates = document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn, .review-card');
-  for (const el of candidates) {
-    const rect = el.getBoundingClientRect();
-    const pad = 16;
-    if (x >= rect.left - pad && x <= rect.right + pad &&
-        y >= rect.top - pad && y <= rect.bottom + pad) {
-      if (!el.disabled && (el.closest('.screen.active') || el.closest('#photo-zoom-modal.active'))) return el;
+  // 1. Direct hit check via elementFromPoint
+  const hit = document.elementFromPoint(x, y);
+  if (hit) {
+    const target = hit.closest('button, a, .btn, .btn-interactive, .frame-card, .landing-cta-btn, .review-card, [onclick]');
+    if (target && !target.disabled) {
+      if (target.closest('.screen.active') || target.closest('#photo-zoom-modal.active')) {
+        return target;
+      }
     }
   }
-  return null;
+
+  // 2. Proximity search: find closest interactive element within 28px padding
+  const candidates = document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn, .review-card, button, [onclick]');
+  let best = null;
+  let bestDist = Infinity;
+  const pad = 28;
+
+  for (const el of candidates) {
+    if (el.disabled) continue;
+    if (!el.closest('.screen.active') && !el.closest('#photo-zoom-modal.active')) continue;
+    const rect = el.getBoundingClientRect();
+    if (x >= rect.left - pad && x <= rect.right + pad &&
+        y >= rect.top - pad && y <= rect.bottom + pad) {
+      const cx = (rect.left + rect.right) / 2;
+      const cy = (rect.top + rect.bottom) / 2;
+      const dist = Math.hypot(x - cx, y - cy);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = el;
+      }
+    }
+  }
+  return best;
 }
+
+// Reconnect camera stream if disconnected or when tab/laptop is refocused
+function ensureCameraStream() {
+  const streamEl = document.getElementById('camera-stream');
+  if (streamEl && (appState.screen === 'camera' || !appState.screen || appState.screen === 'landing')) {
+    streamEl.src = '/video_feed?t=' + Date.now();
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    ensureCameraStream();
+    fetchState();
+    fetchCursor();
+  }
+});
+
+window.addEventListener('focus', () => {
+  ensureCameraStream();
+});
 
 async function startClientCountdown() {
   if (countdownRunning) return;
@@ -6181,16 +6315,14 @@ function renderLoop() {
     else if (appState.gesture === 'peace') cursor.classList.add('peace');
   }
 
-  // Hover detection
+  // Hover detection synchronized with getInteractiveAt
   if (appState.handDetected && !settingsOpen && !appState.adminMode) {
     const x = appState.cursor.x * window.innerWidth;
     const y = appState.cursor.y * window.innerHeight;
-    document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn').forEach(el => {
-      const rect = el.getBoundingClientRect();
-      const pad = 16;
-      const inside = x >= rect.left - pad && x <= rect.right + pad &&
-                     y >= rect.top - pad && y <= rect.bottom + pad;
-      el.classList.toggle('hovered', inside && !!el.closest('.screen.active'));
+    const activeTarget = getInteractiveAt(x, y);
+    document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn, .review-card, button, [onclick]').forEach(el => {
+      const isTarget = (el === activeTarget) && !!(el.closest('.screen.active') || el.closest('#photo-zoom-modal.active'));
+      el.classList.toggle('hovered', isTarget);
     });
   }
 
@@ -6275,6 +6407,10 @@ function openSettings() {
   appState.adminMode = true;
   resetGestureLatches();
 
+  // Lazy-load camera preview inside settings panel
+  const prev = document.getElementById('settings-camera-stream');
+  if (prev) prev.src = '/video_feed?t=' + Date.now();
+
   fetch('/api/admin_mode', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -6293,6 +6429,10 @@ function closeSettings() {
   settingsOpen = false;
   appState.adminMode = false;
   resetGestureLatches();
+
+  // Stop camera preview inside settings panel to save streaming resources
+  const prev = document.getElementById('settings-camera-stream');
+  if (prev) prev.src = '';
 
   fetch('/api/admin_mode', {
     method: 'POST',
