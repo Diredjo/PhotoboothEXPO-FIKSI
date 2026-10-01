@@ -225,6 +225,8 @@ PRINTER_NAME = ""             # Empty string = system default printer
 PRINT_WIDTH_MM = 297          # A4 paper width (landscape: 297mm)
 PRINT_HEIGHT_MM = 210         # A4 paper height (landscape: 210mm)
 PRINT_DPI = 300               # Print resolution
+PRINT_STRIP_HEIGHT_CM = 12.0  # Output print strip height in cm (width adjusts proportionally)
+PRINT_STRIP_COPIES = 1        # Number of strips printed on A4 sheet (1 or 2)
 AUTO_PRINT = False            # Auto-print after compositing without confirmation
 PRINT_FALLBACK_SEC = 60       # After this many seconds in PRINTING, show Back/Next escape
 
@@ -306,6 +308,8 @@ config = {
     "print_width_mm": PRINT_WIDTH_MM,
     "print_height_mm": PRINT_HEIGHT_MM,
     "print_dpi": PRINT_DPI,
+    "print_strip_height_cm": PRINT_STRIP_HEIGHT_CM,
+    "print_strip_copies": PRINT_STRIP_COPIES,
     "auto_print": AUTO_PRINT,
     "print_fallback_sec": PRINT_FALLBACK_SEC,
     "dark_mode": DARK_MODE,
@@ -414,6 +418,8 @@ class AppSession:
                 if self.print_started_mono is not None else 0.0
             ),
             "print_fallback_sec": config["print_fallback_sec"],
+            "print_strip_height_cm": config.get("print_strip_height_cm", 12.0),
+            "print_strip_copies": config.get("print_strip_copies", 1),
             "countdown_active": self.countdown_active,
             "countdown_value": self.countdown_value,
             "photo_slots_filled": len(self.photos),
@@ -2003,8 +2009,11 @@ class FrameManager:
     def generate_a4_sheet(self, single_composite_path: str, session_id: str) -> Optional[str]:
         """
         Creates an A4 Landscape print sheet (3508 x 2480 px @ 300 DPI) containing
-        1 single vertical photostrip positioned at the left edge (mepet di sebelah kiri)
-        with a dashed cutting guide line, saving paper and ink so the remaining paper can be reused.
+        the photostrip scaled to exact target height (default 10.0 cm) with width
+        adjusting proportionally according to the frame aspect ratio.
+        Includes high-contrast dashed cutting guidelines (garis putus-putus) tracing
+        the exact frame perimeter, extension lines, and crop marks for straight,
+        easy cutting.
         """
         if not single_composite_path or not os.path.exists(single_composite_path):
             print(f"[A4 COMPOSITE ERROR] Single strip not found: {single_composite_path}")
@@ -2018,39 +2027,110 @@ class FrameManager:
             canvas_w, canvas_h = 3508, 2480
             a4 = Image.new("RGB", (canvas_w, canvas_h), (255, 255, 255))
 
-            # Scaled strip height: 2400 px (40px margin top and bottom)
-            target_h = 2400
+            dpi = int(config.get("print_dpi", 300))
+            px_per_cm = dpi / 2.54
+
+            # Target strip height: default 12.0 cm (user requirement)
+            target_h_cm = float(config.get("print_strip_height_cm", 12.0))
+            target_h = int(round(target_h_cm * px_per_cm))
+
+            # Width adjusts proportionally (menyesuaikan aspek rasio)
             scale = target_h / strip.height
-            target_w = int(strip.width * scale)
+            target_w = int(round(strip.width * scale))
+            target_w_cm = target_w / px_per_cm
 
             strip_resized = strip.resize((target_w, target_h), Image.Resampling.LANCZOS)
 
-            # 1 strip positioned on the LEFT side (40px safe margin from left edge)
-            x_pos = 40
-            y_pos = (canvas_h - target_h) // 2
+            copies = int(config.get("print_strip_copies", 1))
+            copies = max(1, min(copies, 2))
 
-            a4.paste(strip_resized, (x_pos, y_pos))
+            # Margin from top-left (safe printer margin: ~6.7mm = 80px)
+            margin_x = 80
+            margin_y = 80
+            gap_x = int(round(0.8 * px_per_cm)) if copies > 1 else 0
 
-            # Draw subtle cutting guide line right after the strip
+            for i in range(copies):
+                cur_x = margin_x + i * (target_w + gap_x)
+                a4.paste(strip_resized, (cur_x, margin_y))
+
             draw = ImageDraw.Draw(a4)
-            cut_x = x_pos + target_w + 25
 
-            dash_len = 28
-            gap_len = 16
-            y = 12
-            while y < canvas_h - 12:
-                y_end = min(y + dash_len, canvas_h - 12)
-                draw.line([(cut_x, y), (cut_x, y_end)], fill=(200, 205, 215), width=3)
-                y += dash_len + gap_len
+            # Dashed line drawing helper for straight lines
+            def draw_dashed_line(pt1, pt2, color, width=3, dash=18, gap=12):
+                x_start, y_start = pt1
+                x_end, y_end = pt2
+                dist = math.hypot(x_end - x_start, y_end - y_start)
+                if dist == 0:
+                    return
+                dx = (x_end - x_start) / dist
+                dy = (y_end - y_start) / dist
+                curr = 0.0
+                while curr < dist:
+                    seg_end = min(curr + dash, dist)
+                    p1 = (round(x_start + dx * curr), round(y_start + dy * curr))
+                    p2 = (round(x_start + dx * seg_end), round(y_start + dy * seg_end))
+                    draw.line([p1, p2], fill=color, width=width)
+                    curr += dash + gap
 
-            # Draw subtle cut markers at top and bottom margins
-            draw.line([(cut_x - 16, 25), (cut_x + 16, 25)], fill=(160, 168, 180), width=2)
-            draw.line([(cut_x - 16, canvas_h - 25), (cut_x + 16, canvas_h - 25)], fill=(160, 168, 180), width=2)
+            # Colors for clear cutting guidance on white paper
+            frame_line_color = (120, 125, 135)   # Clear visible dashed cutline along frame border
+            ext_line_color = (180, 185, 195)     # Extended lines to guide scissors from paper edges
+            crop_mark_color = (80, 85, 95)       # Solid corner crop ticks
+
+            y1 = margin_y
+            y2 = margin_y + target_h
+
+            for i in range(copies):
+                x1 = margin_x + i * (target_w + gap_x)
+                x2 = x1 + target_w
+
+                # 1. Garis putus-putus tepat di sekeliling 4 sisi frame (Top, Right, Bottom, Left)
+                draw_dashed_line((x1, y1), (x2, y1), frame_line_color, width=3, dash=18, gap=12) # Atas
+                draw_dashed_line((x2, y1), (x2, y2), frame_line_color, width=3, dash=18, gap=12) # Kanan
+                draw_dashed_line((x2, y2), (x1, y2), frame_line_color, width=3, dash=18, gap=12) # Bawah
+                draw_dashed_line((x1, y2), (x1, y1), frame_line_color, width=3, dash=18, gap=12) # Kiri
+
+                # 2. Tanda potong sudut (Corner Crop Marks) di luar frame
+                tl = 30
+                off = 3
+                draw.line([(x1 - off - tl, y1), (x1 - off, y1)], fill=crop_mark_color, width=2)
+                draw.line([(x1, y1 - off - tl), (x1, y1 - off)], fill=crop_mark_color, width=2)
+                draw.line([(x2 + off, y1), (x2 + off + tl, y1)], fill=crop_mark_color, width=2)
+                draw.line([(x2, y1 - off - tl), (x2, y1 - off)], fill=crop_mark_color, width=2)
+                draw.line([(x1 - off - tl, y2), (x1 - off, y2)], fill=crop_mark_color, width=2)
+                draw.line([(x1, y2 + off), (x1, y2 + off + tl)], fill=crop_mark_color, width=2)
+                draw.line([(x2 + off, y2), (x2 + off + tl, y2)], fill=crop_mark_color, width=2)
+                draw.line([(x2, y2 + off), (x2, y2 + off + tl)], fill=crop_mark_color, width=2)
+
+                # 3. Garis panduan perpanjangan ke tepi kertas (membantu potong lurus dari luar)
+                draw_dashed_line((x1, 15), (x1, y1 - off), ext_line_color, width=2, dash=14, gap=10)
+                draw_dashed_line((x2, 15), (x2, y1 - off), ext_line_color, width=2, dash=14, gap=10)
+                draw_dashed_line((x1, y2 + off), (x1, y2 + 130), ext_line_color, width=2, dash=14, gap=10)
+                draw_dashed_line((x2, y2 + off), (x2, y2 + 130), ext_line_color, width=2, dash=14, gap=10)
+
+                if i == 0:
+                    draw_dashed_line((15, y1), (x1 - off, y1), ext_line_color, width=2, dash=14, gap=10)
+                    draw_dashed_line((15, y2), (x1 - off, y2), ext_line_color, width=2, dash=14, gap=10)
+                if i == copies - 1:
+                    draw_dashed_line((x2 + off, y1), (x2 + 140, y1), ext_line_color, width=2, dash=14, gap=10)
+                    draw_dashed_line((x2 + off, y2), (x2 + 140, y2), ext_line_color, width=2, dash=14, gap=10)
+
+            # Garis tengah jika 2 strip kembar
+            if copies > 1:
+                mid_x = margin_x + target_w + gap_x // 2
+                draw_dashed_line((mid_x, 15), (mid_x, y2 + 130), (140, 145, 155), width=2, dash=16, gap=10)
+
+            # Label teks instruksi potong
+            cut_label = f"✂ GARIS POTONG (CUT LINE) — Tinggi: {target_h_cm:.1f} cm x Lebar: {target_w_cm:.1f} cm | Potong mengikuti garis putus-putus"
+            try:
+                draw.text((margin_x, y2 + 25), cut_label, fill=(110, 115, 125))
+            except Exception:
+                pass
 
             out_name = f"{session_id}_a4_landscape.jpg"
             out_path = str(PHOTOS_DIR / out_name)
             a4.save(out_path, quality=config["photo_jpeg_quality"], optimize=True)
-            print(f"[FRAME] A4 Landscape sheet saved: {out_path} ({canvas_w}x{canvas_h}) with 1 strip left")
+            print(f"[FRAME] A4 Landscape sheet saved: {out_path} ({canvas_w}x{canvas_h}) [Strip: {target_w_cm:.2f}x{target_h_cm:.2f} cm, {copies} strip(s)] with frame-matching cutlines")
             return out_path
         except Exception as e:
             print(f"[A4 COMPOSITE ERROR] Failed to create A4 sheet: {e}")
@@ -2314,7 +2394,15 @@ class SessionController:
 
     def _do_print(self):
         with session_lock:
-            fpath = session.a4_image_path or session.final_image_path
+            fpath = session.a4_image_path
+            final_path = session.final_image_path
+            sid = session.session_id
+        if (not fpath or not os.path.exists(fpath)) and final_path and os.path.exists(final_path):
+            fpath = frame_manager.generate_a4_sheet(final_path, sid)
+            with session_lock:
+                session.a4_image_path = fpath
+        if not fpath or not os.path.exists(fpath):
+            fpath = final_path
         if not fpath or not os.path.exists(fpath):
             with session_lock:
                 session.print_state = "failed"
@@ -2994,6 +3082,13 @@ def api_photo_preview(idx: int):
 def api_a4_preview():
     with session_lock:
         path = session.a4_image_path
+        final_path = session.final_image_path
+        sid = session.session_id
+    if (not path or not os.path.exists(path)) and final_path and os.path.exists(final_path):
+        path = frame_manager.generate_a4_sheet(final_path, sid)
+        with session_lock:
+            session.a4_image_path = path
+
     if path and os.path.exists(path):
         resp = send_file(path, mimetype="image/jpeg")
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -4143,9 +4238,33 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   transition: transform var(--tr-fast), box-shadow var(--tr-fast);
 }
 
+.preview-dimensions-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(253, 192, 15, 0.12);
+  border: 1px solid rgba(253, 192, 15, 0.35);
+  color: var(--col-yellow);
+  padding: 4px 16px;
+  border-radius: var(--r-full);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  margin-top: 3px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
 .preview-paper.single-strip {
   aspect-ratio: 1623 / 3557;
   height: 100%;
+}
+
+.preview-paper.a4-sheet {
+  aspect-ratio: 3508 / 2480;
+  height: 100%;
+  max-width: 92vw;
+  background: #ffffff;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 18px 45px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(0, 0, 0, 0.12);
 }
 
 .preview-paper img {
@@ -4446,6 +4565,116 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 #gesture-debug-overlay .gd-val { color: var(--col-yellow); }
 #gesture-debug-overlay .gd-val.ok { color: #22C55E; }
 #gesture-debug-overlay .gd-val.err { color: #EF4444; }
+
+/* ============================================================ */
+/* FLOATING MINI CAMERA PREVIEW (TOP-LEFT)                       */
+/* Visible on all screens EXCEPT #screen-camera                 */
+/* ============================================================ */
+#mini-camera-preview {
+  position: fixed;
+  top: 22px;
+  left: 24px;
+  width: 192px;
+  height: 108px;
+  border-radius: 16px;
+  overflow: hidden;
+  background: #0D0F14;
+  border: 2px solid rgba(255, 255, 255, 0.20);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  z-index: 950;
+  display: flex;
+  flex-direction: column;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-10px) scale(0.94);
+  transition: opacity 280ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 280ms cubic-bezier(0.16, 1, 0.3, 1),
+              border-color 200ms ease,
+              box-shadow 200ms ease;
+}
+
+#mini-camera-preview.visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+/* Dynamic status feedback */
+#mini-camera-preview.hand-detected {
+  border-color: rgba(34, 197, 94, 0.85);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 18px rgba(34, 197, 94, 0.45);
+}
+
+#mini-camera-preview.gesture-action {
+  border-color: var(--col-yellow);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55), 0 0 22px rgba(253, 192, 15, 0.6);
+}
+
+.mini-cam-media-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+}
+
+#mini-camera-stream {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.mini-cam-header {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  right: 7px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.mini-cam-live-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: rgba(13, 15, 20, 0.78);
+  backdrop-filter: blur(8px);
+  border-radius: var(--r-full);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  color: #fff;
+  text-transform: uppercase;
+}
+
+.mini-cam-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #EF4444;
+  box-shadow: 0 0 6px #EF4444;
+  animation: miniCamDotPulse 1.4s infinite ease-in-out;
+}
+
+@keyframes miniCamDotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.75); }
+}
+
+@media (max-width: 900px) {
+  #mini-camera-preview {
+    top: 14px;
+    left: 14px;
+    width: 148px;
+    height: 84px;
+  }
+}
 
 /* GESTURE HUD INDICATOR */
 #gesture-hud {
@@ -5227,17 +5456,20 @@ body.dark-mode .settings-footer .btn-ghost:hover {
       <p style="color: var(--col-text-2); font-size: var(--text-sm); margin: 0;">
         Periksa hasil foto Anda di bawah ini sebelum dicetak.
       </p>
+      <div class="preview-dimensions-pill" id="preview-dimensions-tag">
+        📏 Ukuran Cetak: <strong>12.0 cm</strong> tinggi (Dilengkapi Garis Potong)
+      </div>
     </div>
 
-    <!-- Preview Stage / Single Strip Paper Mockup -->
+    <!-- Preview Stage / 1 Lembar Frame Mockup -->
     <div class="preview-stage-container">
       <div class="preview-paper single-strip" id="preview-paper-strip">
         <div class="preview-loader" id="preview-sheet-loader">
           <div class="spinner"></div>
-          <span>Menyiapkan Preview Foto...</span>
+          <span id="preview-loader-text">Menyiapkan Preview Foto...</span>
         </div>
-        <img id="preview-sheet-img" src="" alt="Photo Strip Preview" onload="onPreviewImgLoaded('sheet')">
-        <div class="preview-cut-badge">✨ Siap Dicetak (1 Lembar Strip)</div>
+        <img id="preview-sheet-img" src="" alt="Live Preview Foto Strip" onload="onPreviewImgLoaded('sheet')">
+        <div class="preview-cut-badge" id="preview-badge-status">✨ Siap Dicetak (1 Lembar Strip • 12 cm)</div>
       </div>
     </div>
 
@@ -5249,9 +5481,9 @@ body.dark-mode .settings-footer .btn-ghost:hover {
       <button class="btn btn-secondary btn-interactive" onclick="openDownloadModal()" title="Download foto ke HP lewat QR Code">
         <span>📱 Scan QR / Download</span>
       </button>
-      <button class="btn btn-primary btn-interactive btn-print-cta" onclick="doAction('print_photo')" title="Cetak langsung ke printer EPSON A4">
+      <button class="btn btn-primary btn-interactive btn-print-cta" onclick="doAction('print_photo')" title="Cetak langsung ke printer EPSON A4 (Tinggi 12cm)">
         <span style="font-size: 20px;">🖨️</span>
-        <span>Cetak Sekarang (Print)</span>
+        <span>Cetak Sekarang (Print 12cm)</span>
       </button>
     </div>
 
@@ -5335,6 +5567,19 @@ body.dark-mode .settings-footer .btn-ghost:hover {
     </div>
   </div>
 
+</div>
+
+<!-- Floating Mini Camera Preview (Top-Left, visible on all screens except main camera) -->
+<div id="mini-camera-preview" class="visible" aria-label="Mini Camera Live Preview">
+  <div class="mini-cam-media-wrap">
+    <img id="mini-camera-stream" src="/video_feed" alt="Mini Live Feed" onerror="setTimeout(ensureMiniCameraStream, 2000)">
+    <div class="mini-cam-header">
+      <div class="mini-cam-live-tag">
+        <span class="mini-cam-pulse-dot"></span>
+        <span>LIVE</span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Virtual Cursor -->
@@ -5670,6 +5915,21 @@ body.dark-mode .settings-footer .btn-ghost:hover {
               <div class="settings-control">
                 <select id="cfg-printer_name">
                   <option value="">(System Default)</option>
+                </select>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Tinggi Strip Output (cm)</div>
+              <div class="settings-control">
+                <input type="number" id="cfg-print_strip_height_cm" step="0.5" min="5" max="25" style="width: 80px;">
+              </div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">Jumlah Strip pada Kertas A4</div>
+              <div class="settings-control">
+                <select id="cfg-print_strip_copies">
+                  <option value="1">1 Strip (Hemat Kertas & Tinta)</option>
+                  <option value="2">2 Strips (Twin Strip Kembar)</option>
                 </select>
               </div>
             </div>
@@ -6058,12 +6318,46 @@ function updateDiagnosticsView(cam, g) {
   if (lErr) lErr.textContent = g.last_gesture_error || 'None';
 }
 
+function updateMiniCamera(screenName) {
+  const miniCam = document.getElementById('mini-camera-preview');
+  const miniStream = document.getElementById('mini-camera-stream');
+  if (!miniCam) return;
+
+  const isCamera = (screenName === 'camera');
+  if (isCamera) {
+    if (miniCam.classList.contains('visible')) {
+      miniCam.classList.remove('visible');
+    }
+    // Stop mini camera stream to save resources when on main camera screen
+    if (miniStream && miniStream.src && miniStream.src.indexOf('/video_feed') !== -1) {
+      miniStream.src = '';
+    }
+  } else {
+    if (!miniCam.classList.contains('visible')) {
+      miniCam.classList.add('visible');
+    }
+    // Ensure stream is active on other screens
+    if (miniStream && (!miniStream.src || miniStream.src.indexOf('/video_feed') === -1)) {
+      miniStream.src = '/video_feed?t=' + Date.now();
+    }
+  }
+}
+
+function ensureMiniCameraStream() {
+  const miniCam = document.getElementById('mini-camera-preview');
+  const miniStream = document.getElementById('mini-camera-stream');
+  if (miniCam && miniStream && appState.screen !== 'camera') {
+    miniStream.src = '/video_feed?t=' + Date.now();
+  }
+}
+
 function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const target = document.getElementById(`screen-${name}`);
   if (target) {
     target.classList.add('active');
     appState.screen = name;
+    updateMiniCamera(name);
   }
 }
 
@@ -6072,6 +6366,14 @@ function transitionToScreen(name) {
   const target = document.getElementById(`screen-${name}`);
   if (!target) return;
   target.classList.add('active');
+  updateMiniCamera(name);
+
+  if (name === 'camera') {
+    const camStream = document.getElementById('camera-stream');
+    if (camStream && (!camStream.src || camStream.src.indexOf('/video_feed') === -1)) {
+      camStream.src = '/video_feed?t=' + Date.now();
+    }
+  }
 
   if (appState.screen === 'payment' && name !== 'payment') resetF9();
   if (name === 'preview') loadLivePreview();
@@ -6334,24 +6636,40 @@ function selectFrame(filename) {
 let livePreviewLoaded = false;
 
 function loadLivePreview() {
-  const sheetImg = document.getElementById('preview-sheet-img');
-  const sheetLoader = document.getElementById('preview-sheet-loader');
-  if (sheetLoader) sheetLoader.style.display = 'flex';
-  if (sheetImg) {
-    sheetImg.src = '/api/final_photo?t=' + Date.now();
+  livePreviewLoaded = true;
+  const paper = document.getElementById('preview-paper-strip');
+  const img = document.getElementById('preview-sheet-img');
+  const loader = document.getElementById('preview-sheet-loader');
+  const loaderText = document.getElementById('preview-loader-text');
+  const badge = document.getElementById('preview-badge-status');
+
+  if (loader) loader.style.display = 'flex';
+  if (loaderText) loaderText.textContent = 'Menyiapkan Preview Foto...';
+  if (paper) {
+    paper.className = 'preview-paper single-strip';
   }
+  if (badge) {
+    badge.textContent = '✨ Siap Dicetak (1 Lembar Strip • 12 cm)';
+  }
+
+  const hCm = (appState && appState.session && appState.session.print_strip_height_cm) || 12.0;
+  const dimTag = document.getElementById('preview-dimensions-tag');
+  if (dimTag) {
+    dimTag.innerHTML = `📏 Ukuran Cetak: <strong>${Number(hCm).toFixed(1)} cm</strong> tinggi (Dilengkapi Garis Potong)`;
+  }
+
+  if (img) {
+    // Tampilkan hanya 1 lembar frame strip foto
+    img.src = '/api/final_photo?t=' + Date.now();
+  }
+
   // Preload QR in background so download modal is instant
   loadFinalQR();
 }
 
 function onPreviewImgLoaded(type) {
-  if (type === 'sheet') {
-    const loader = document.getElementById('preview-sheet-loader');
-    if (loader) loader.style.display = 'none';
-  } else if (type === 'strip') {
-    const loader = document.getElementById('preview-strip-loader');
-    if (loader) loader.style.display = 'none';
-  }
+  const loader = document.getElementById('preview-sheet-loader');
+  if (loader) loader.style.display = 'none';
 }
 
 function openDownloadModal() {
@@ -6514,6 +6832,15 @@ function updateGestureHUD() {
   document.getElementById('gest-palm')?.classList.toggle('active', g === 'palm');
   document.getElementById('gest-fist')?.classList.toggle('active', g === 'fist');
   document.getElementById('gest-peace')?.classList.toggle('active', g === 'peace');
+
+  // Update floating mini camera feedback so user always knows gesture status
+  const miniCam = document.getElementById('mini-camera-preview');
+  if (miniCam) {
+    const isDetected = !!appState.handDetected;
+    const isAction = (g === 'fist' || g === 'peace');
+    miniCam.classList.toggle('hand-detected', isDetected && !isAction);
+    miniCam.classList.toggle('gesture-action', isAction);
+  }
 }
 
 function updateCursorProgress(progress, isFist = true) {
@@ -6728,6 +7055,7 @@ function ensureCameraStream() {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     ensureCameraStream();
+    ensureMiniCameraStream();
     fetchState();
     fetchCursor();
   }
@@ -6735,6 +7063,7 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('focus', () => {
   ensureCameraStream();
+  ensureMiniCameraStream();
 });
 
 async function startClientCountdown() {
