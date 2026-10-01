@@ -227,6 +227,8 @@ PRINT_HEIGHT_MM = 210         # A4 paper height (landscape: 210mm)
 PRINT_DPI = 300               # Print resolution
 PRINT_STRIP_HEIGHT_CM = 12.0  # Output print strip height in cm (width adjusts proportionally)
 PRINT_STRIP_COPIES = 1        # Number of strips printed on A4 sheet (1 or 2)
+PRINT_MEDIA_TYPE = "glossy"   # "glossy" (Photo Paper Glossy - Art Paper), "plain", "matte", "driver_default"
+PRINT_QUALITY = "high"        # "high" (High Quality Photo), "standard", "driver_default"
 AUTO_PRINT = False            # Auto-print after compositing without confirmation
 PRINT_FALLBACK_SEC = 60       # After this many seconds in PRINTING, show Back/Next escape
 
@@ -310,6 +312,8 @@ config = {
     "print_dpi": PRINT_DPI,
     "print_strip_height_cm": PRINT_STRIP_HEIGHT_CM,
     "print_strip_copies": PRINT_STRIP_COPIES,
+    "print_media_type": PRINT_MEDIA_TYPE,
+    "print_quality": PRINT_QUALITY,
     "auto_print": AUTO_PRINT,
     "print_fallback_sec": PRINT_FALLBACK_SEC,
     "dark_mode": DARK_MODE,
@@ -1801,9 +1805,35 @@ class PrinterManager:
                         devmode.Orientation = win32con.DMORIENT_LANDSCAPE
                         devmode.PaperSize = win32con.DMPAPER_A4
                         devmode.Fields = devmode.Fields | win32con.DM_ORIENTATION | win32con.DM_PAPERSIZE
+
+                        # Color mode: Full vibrant color
+                        devmode.Color = win32con.DMCOLOR_COLOR
+                        devmode.Fields = devmode.Fields | win32con.DM_COLOR
+
+                        # Media Type configuration (Photo Paper Glossy for Art Paper / Photo Paper)
+                        m_type = config.get("print_media_type", "glossy")
+                        if m_type == "glossy":
+                            devmode.MediaType = getattr(win32con, "DMMEDIA_GLOSSY", 3)
+                            devmode.Fields = devmode.Fields | win32con.DM_MEDIATYPE
+                        elif m_type == "plain":
+                            devmode.MediaType = getattr(win32con, "DMMEDIA_STANDARD", 1)
+                            devmode.Fields = devmode.Fields | win32con.DM_MEDIATYPE
+                        elif m_type == "matte":
+                            devmode.MediaType = 4  # Standard Matte Paper in Windows DEVMODE
+                            devmode.Fields = devmode.Fields | win32con.DM_MEDIATYPE
+
+                        # Print Quality configuration
+                        p_qual = config.get("print_quality", "high")
+                        if p_qual == "high":
+                            devmode.PrintQuality = win32con.DMRES_HIGH
+                            devmode.Fields = devmode.Fields | win32con.DM_PRINTQUALITY
+                        elif p_qual == "standard":
+                            devmode.PrintQuality = win32con.DMRES_MEDIUM
+                            devmode.Fields = devmode.Fields | win32con.DM_PRINTQUALITY
+
                         hdc_handle = win32gui.CreateDC('WINSPOOL', target_printer, devmode)
                         hdc = win32ui.CreateDCFromHandle(hdc_handle)
-                        print(f"[PRINT] Initialized DC with Landscape DEVMODE on {target_printer}")
+                        print(f"[PRINT] Initialized DC with Landscape DEVMODE on {target_printer} [Media: {m_type}, Quality: {p_qual}]")
                     finally:
                         try:
                             win32print.ClosePrinter(hPrinter)
@@ -3261,6 +3291,26 @@ def api_open_photos_folder():
         else:
             subprocess.run(["xdg-open", str(PHOTOS_DIR.resolve())], check=False)
         return jsonify({"ok": True, "message": "Folder dibuka di file manager"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/open_printer_preferences", methods=["POST"])
+def api_open_printer_preferences():
+    """Opens native Windows Printer Preferences dialog for the configured or default printer."""
+    try:
+        data = request.json or {}
+        p_name = data.get("printer_name") or config.get("printer_name") or printer_manager.get_default_printer()
+        if not p_name:
+            return jsonify({"ok": False, "error": "Tidak ada printer yang terdeteksi"}), 400
+        if sys.platform == "win32":
+            def _open():
+                try:
+                    subprocess.run(f'rundll32.exe printui.dll,PrintUIEntry /e /n "{p_name}"', shell=True)
+                except Exception as ex:
+                    print(f"[PRINT PREFS ERROR] {ex}")
+            threading.Thread(target=_open, daemon=True).start()
+            return jsonify({"ok": True, "message": f"Membuka preferensi printer: {p_name}"})
+        return jsonify({"ok": False, "error": "Hanya didukung di Windows"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -6414,6 +6464,33 @@ body.dark-mode .gallery-zoom-card {
               </div>
             </div>
             <div class="settings-row">
+              <div class="settings-label">
+                <div>Media Kertas (Tipe Kertas)</div>
+                <div class="settings-hint" style="font-size: 11px; color: var(--col-text-3);">Pilih Photo Paper (Glossy) untuk kertas Art Paper agar semprotan tinta pekat dan tidak luntur</div>
+              </div>
+              <div class="settings-control">
+                <select id="cfg-print_media_type">
+                  <option value="glossy">Photo Paper (Glossy) — Art Paper / Kertas Foto</option>
+                  <option value="plain">Plain Paper — Kertas HVS / Kertas Biasa</option>
+                  <option value="matte">Kertas Foto (Matte / Doff)</option>
+                  <option value="driver_default">Sesuai Bawaan Driver Printer</option>
+                </select>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label">
+                <div>Kualitas Cetak (Print Quality)</div>
+                <div class="settings-hint" style="font-size: 11px; color: var(--col-text-3);">High Quality direkomendasikan untuk hasil cetak foto booth</div>
+              </div>
+              <div class="settings-control">
+                <select id="cfg-print_quality">
+                  <option value="high">Kualitas Tinggi (High / Foto Pekat & Tajam)</option>
+                  <option value="standard">Kualitas Standar (Normal)</option>
+                  <option value="driver_default">Sesuai Bawaan Driver Printer</option>
+                </select>
+              </div>
+            </div>
+            <div class="settings-row">
               <div class="settings-label">Tinggi Strip Output (cm)</div>
               <div class="settings-control">
                 <input type="number" id="cfg-print_strip_height_cm" step="0.5" min="5" max="25" style="width: 80px;">
@@ -6431,6 +6508,17 @@ body.dark-mode .gallery-zoom-card {
             <div class="settings-row">
               <div class="settings-label">Auto Print on Complete</div>
               <div class="settings-control"><div class="settings-toggle" id="cfg-auto_print" onclick="toggleSetting(this)"></div></div>
+            </div>
+
+            <!-- Quick Driver Access Button -->
+            <div style="margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--col-border); display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+              <div>
+                <strong style="font-size: 12px; display: block; color: var(--col-text);">Pengaturan Driver Windows (EPSON)</strong>
+                <span style="font-size: 11px; color: var(--col-text-2);">Buka dialog properti printer bawaan Windows untuk mengatur Paper Tray, Borderless, dll.</span>
+              </div>
+              <button class="btn btn-ghost" onclick="openPrinterPreferences()" style="font-size: 12px; padding: 8px 16px;">
+                ⚙️ Buka Driver Preferences
+              </button>
             </div>
           </div>
         </div>
@@ -8241,6 +8329,27 @@ async function openPhotosFolderInExplorer() {
       showToast('📂 Folder photos dibuka di Windows Explorer');
     } else {
       showToast(`Gagal membuka folder: ${data.error}`);
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`);
+  }
+}
+
+async function openPrinterPreferences() {
+  const pSel = document.getElementById('cfg-printer_name');
+  const printerName = pSel ? pSel.value : '';
+  showToast('Membuka dialog preferensi printer Windows...');
+  try {
+    const res = await fetch('/api/open_printer_preferences', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({printer_name: printerName})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast('⚙️ Jendela driver printer dibuka di Windows');
+    } else {
+      showToast(`Gagal: ${data.error}`);
     }
   } catch (e) {
     showToast(`Error: ${e.message}`);
