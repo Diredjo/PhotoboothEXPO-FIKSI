@@ -3177,6 +3177,18 @@ def api_final_photo():
         return resp
     abort(404)
 
+@app.route("/api/landing_sample_strip")
+def api_landing_sample_strip():
+    strip_path = ASSETS_DIR / "landing_sample_strip.jpg"
+    if not strip_path.exists():
+        fallback_frame = FRAMES_DIR / "FramePhotoBooth1.png"
+        if fallback_frame.exists():
+            return send_file(str(fallback_frame), mimetype="image/png")
+        return jsonify({"ok": False, "error": "Sample strip not found"}), 404
+    resp = send_file(str(strip_path), mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "public, max-age=3600"
+    return resp
+
 @app.route("/api/saved_photos")
 def api_saved_photos():
     """Returns list of all saved photos and print sheets from PHOTOS_DIR."""
@@ -3833,74 +3845,613 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   z-index: 20;
 }
 
-/* LANDING SCREEN */
+/* LANDING SCREEN (EXPO FIKSI 2-COLUMN HERO LAYOUT) */
 #screen-landing {
   background: var(--col-bg);
-  background-image: var(--grad-hero);
-  padding: 48px;
-  text-align: center;
-  gap: 32px;
+  background-image: radial-gradient(circle at 12% 18%, rgba(88,78,184,0.08) 0%, transparent 45%),
+                    radial-gradient(circle at 88% 80%, rgba(253,192,15,0.06) 0%, transparent 45%);
+  padding: clamp(20px, 2.8vh, 32px) clamp(24px, 3.6vw, 48px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: stretch;
+  text-align: left;
+  gap: 0;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
-.brand-badge {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 8px 20px;
-  background: var(--grad-blue-soft);
-  border: 1px solid var(--col-border);
-  border-radius: var(--r-full);
-  font-size: var(--text-sm); font-weight: 600;
-  color: var(--col-blue-1);
-  letter-spacing: 2px; text-transform: uppercase;
+/* TOP HEADER BAR */
+.landing-top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  z-index: 10;
 }
 
-.landing-title {
-  font-size: var(--text-3xl); font-weight: 900;
-  line-height: 1.1;
-  background: var(--grad-blue);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.landing-sub {
-  font-size: var(--text-lg);
-  color: var(--col-text-2);
-  max-width: 580px;
-}
-
-.landing-cta-btn {
-  display: inline-flex; align-items: center; gap: 16px;
-  padding: 24px 56px;
-  background: var(--grad-yellow);
-  color: #111318;
-  font-size: var(--text-xl); font-weight: 800;
-  border-radius: var(--r-full);
-  border: none;
-  box-shadow: var(--shadow-yellow);
-  cursor: pointer;
-  transition: transform var(--tr-fast), box-shadow var(--tr-fast);
-}
-
-.landing-cta-btn:hover, .landing-cta-btn.hovered {
-  transform: scale(1.04);
-  box-shadow: 0 8px 32px rgba(253,192,15,0.55);
-}
-
-.gesture-guide-pill {
-  display: flex; align-items: center; gap: 24px;
-  padding: 16px 32px;
+.camera-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 18px 6px 8px;
   background: var(--col-surface);
   border: 1px solid var(--col-border);
   border-radius: var(--r-full);
   box-shadow: var(--shadow-sm);
 }
 
-.guide-step {
-  display: flex; align-items: center; gap: 8px;
-  font-size: var(--text-sm); font-weight: 600;
+.cam-pill-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--col-surface-2);
+  border: 2px solid var(--col-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.cam-pill-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.cam-pill-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cam-pill-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--col-text);
+}
+
+.cam-pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--col-success);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+}
+
+.cam-pill-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--col-text-3);
+  letter-spacing: 0.2px;
+}
+
+.top-capabilities-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cap-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-full);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--col-text);
+  box-shadow: var(--shadow-sm);
+  white-space: nowrap;
+}
+
+.cap-badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--col-success);
+}
+
+.cap-badge-icon {
+  font-size: 14px;
+}
+
+/* 2-COLUMN HERO GRID */
+.landing-hero-grid {
+  display: grid;
+  grid-template-columns: 1.18fr 0.82fr;
+  gap: clamp(24px, 3.2vw, 48px);
+  align-items: center;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+  flex: 1;
+  padding: clamp(8px, 1.5vh, 18px) 0;
+}
+
+/* LEFT COLUMN */
+.landing-content-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: clamp(14px, 2vh, 22px);
+  max-width: 640px;
+}
+
+.landing-edition-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: rgba(88, 78, 184, 0.08);
+  border: 1px solid rgba(88, 78, 184, 0.25);
+  border-radius: var(--r-full);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--col-blue-1);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+
+.landing-hero-title {
+  font-size: clamp(34px, 4vw, 56px);
+  font-weight: 900;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  color: var(--col-text);
+  margin: 0;
+}
+
+.title-gradient-word {
+  position: relative;
+  display: inline-block;
+  background: var(--grad-blue);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  padding-bottom: 6px;
+}
+
+.title-brush-underline {
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  width: 100%;
+  height: 14px;
+  pointer-events: none;
+}
+
+.landing-hero-sub {
+  font-size: clamp(14px, 1.4vw, 16px);
+  line-height: 1.55;
+  color: var(--col-text-2);
+  margin: 0;
+  max-width: 540px;
+}
+
+/* ACTION ROW */
+.landing-action-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.landing-primary-btn, .landing-cta-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 34px 14px 18px;
+  background: var(--grad-blue);
+  color: #FFFFFF;
+  border-radius: var(--r-full);
+  border: none;
+  box-shadow: 0 12px 28px -6px rgba(88, 78, 184, 0.45);
+  cursor: pointer;
+  transition: transform var(--tr-fast), box-shadow var(--tr-fast);
+  text-align: left;
+}
+
+.landing-primary-btn:hover, .landing-primary-btn.hovered,
+.landing-cta-btn:hover, .landing-cta-btn.hovered {
+  transform: translateY(-2px) scale(1.03);
+  box-shadow: 0 16px 36px -4px rgba(88, 78, 184, 0.6);
+}
+
+.landing-primary-btn:active, .landing-cta-btn:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+.btn-icon-circle {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--grad-yellow);
+  color: #111318;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  box-shadow: 0 4px 10px rgba(253, 192, 15, 0.4);
+  flex-shrink: 0;
+}
+
+.btn-text-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.btn-main-label {
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #FFFFFF;
+}
+
+.btn-sub-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.btn-arrow-right {
+  font-size: 22px;
+  font-weight: 700;
+  color: #FFFFFF;
+  margin-left: 6px;
+  transition: transform var(--tr-fast);
+}
+
+.landing-primary-btn:hover .btn-arrow-right, .landing-primary-btn.hovered .btn-arrow-right,
+.landing-cta-btn:hover .btn-arrow-right, .landing-cta-btn.hovered .btn-arrow-right {
+  transform: translateX(4px);
+}
+
+.landing-dwell-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-full);
+  box-shadow: var(--shadow-sm);
+}
+
+.dwell-icon {
+  font-size: 20px;
+}
+
+.dwell-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.dwell-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--col-text);
+}
+
+.dwell-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--col-text-3);
+}
+
+/* TOUCHLESS AI GESTURE CARD */
+.landing-gesture-card {
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: 20px;
+  padding: clamp(14px, 1.8vh, 18px) clamp(16px, 2vw, 22px);
+  box-shadow: var(--shadow-sm);
+  width: 100%;
+  max-width: 560px;
+}
+
+.gesture-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.gesture-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--col-blue-1);
+}
+
+.gesture-header-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--col-blue-1);
+}
+
+.gesture-header-sub {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--col-text-3);
+}
+
+.gesture-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.gesture-subcard {
+  background: var(--col-surface-2);
+  border: 1px solid var(--col-border);
+  border-radius: 14px;
+  padding: 12px 8px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: transform var(--tr-fast), background var(--tr-fast);
+}
+
+.gesture-subcard:hover {
+  background: rgba(88, 78, 184, 0.05);
+  transform: translateY(-2px);
+}
+
+.gesture-subcard-icon {
+  font-size: 24px;
+  margin-bottom: 2px;
+}
+
+.gesture-subcard-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--col-text);
+}
+
+.gesture-subcard-desc {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--col-text-3);
+}
+
+/* RIGHT COLUMN: TILTED PHOTO STRIP MOCKUP */
+.landing-mockup-col {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+}
+
+.strip-mockup-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.strip-mockup-card {
+  transform: rotate(5deg) scale(0.96);
+  background: #FFFFFF;
+  border-radius: 20px;
+  padding: 10px;
+  box-shadow: 0 25px 50px -12px rgba(17, 19, 24, 0.22),
+              0 0 0 1px rgba(88, 78, 184, 0.08);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.4s ease;
+  cursor: pointer;
+}
+
+.strip-mockup-card:hover {
+  transform: rotate(2deg) scale(1);
+  box-shadow: 0 32px 64px -12px rgba(88, 78, 184, 0.3),
+              0 0 0 1px rgba(88, 78, 184, 0.15);
+}
+
+.landing-strip-img {
+  width: auto;
+  height: clamp(340px, 48vh, 520px);
+  border-radius: 12px;
+  object-fit: contain;
+  display: block;
+}
+
+/* FLOATING PILLS ON MOCKUP */
+.float-pill-top {
+  position: absolute;
+  top: -6px;
+  right: -20px;
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: var(--r-full);
+  padding: 8px 18px;
+  box-shadow: 0 14px 28px -6px rgba(17, 19, 24, 0.14);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  z-index: 10;
+  animation: float-soft 3.6s ease-in-out infinite alternate;
+}
+
+.float-pill-cursor-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(88, 78, 184, 0.12);
+  border: 2px solid var(--col-blue-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.float-pill-cursor-inner {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--col-blue-1);
+}
+
+.float-pill-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.float-pill-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--col-text);
+}
+
+.float-pill-desc {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--col-text-3);
+}
+
+.float-pill-bottom {
+  position: absolute;
+  bottom: 18px;
+  left: -26px;
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: 20px;
+  padding: 12px 20px;
+  box-shadow: 0 16px 32px -6px rgba(17, 19, 24, 0.18);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  z-index: 10;
+  animation: float-soft 4.2s ease-in-out infinite alternate-reverse;
+}
+
+.float-pill-printer-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: rgba(253, 192, 15, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  color: var(--col-yellow-dark);
+}
+
+.float-pill-count {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: var(--col-text);
+  line-height: 1.1;
+}
+
+.float-pill-count-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--col-text-3);
+}
+
+.float-pill-qr-icon {
+  font-size: 20px;
+  color: var(--col-blue-1);
+  margin-left: 8px;
+  opacity: 0.8;
+}
+
+@keyframes float-soft {
+  0% { transform: translateY(0px); }
+  100% { transform: translateY(-8px); }
+}
+
+/* BOTTOM FOOTER BAR */
+.landing-bottom-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding-top: 12px;
+  border-top: 1px solid var(--col-border);
+  z-index: 10;
+}
+
+.footer-prompt-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--col-text);
+}
+
+.footer-prompt-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--col-blue-1);
+}
+
+.footer-prompt-sub {
+  color: var(--col-text-3);
+  font-weight: 500;
+}
+
+.footer-status-right {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.footer-key-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--col-text-2);
 }
 
-.guide-step-icon { font-size: 20px; }
+.kbd-tag {
+  display: inline-block;
+  padding: 3px 8px;
+  background: var(--col-surface-2);
+  border: 1px solid var(--col-border);
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--col-text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+.footer-paper-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--col-text-2);
+}
+
+.footer-paper-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--col-success);
+}
 
 /* CAMERA SCREEN */
 #screen-camera {
@@ -5826,35 +6377,161 @@ body.dark-mode .gallery-zoom-card {
 <div id="app">
 
   <!-- LANDING -->
-  <div class="screen active" id="screen-landing">
-    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;">
-      <div class="brand-badge">Rencana Tuhan Studio</div>
-      <div class="controller-status-pill"><span class="ctrl-dot"></span><span>🎮 FULL GESTURE CONTROLLER</span></div>
-    </div>
-    <h1 class="landing-title">Capture Your Joy,<br>Touch-Free.</h1>
-    <p class="landing-sub">Step into the future of studio photography. Use natural hand gestures to create and print your memories.</p>
-    
-    <button class="landing-cta-btn btn-interactive" onclick="doAction('start_camera')">
-      <span>START PHOTO SESSION</span>
-      <span>→</span>
-    </button>
+  <div class="screen active" id="screen-landing" onclick="handleLandingScreenClick(event)">
+    <!-- TOP BAR -->
+    <div class="landing-top-bar">
+      <div class="camera-status-pill">
+        <div class="cam-pill-thumb">
+          <img id="landing-cam-thumb" src="/video_feed" alt="Camera Feed" onerror="this.style.display='none';">
+        </div>
+        <div class="cam-pill-info">
+          <div class="cam-pill-title">
+            <span class="cam-pill-dot"></span>
+            <span id="landing-cam-status-text">Live Camera: Calibrated</span>
+          </div>
+          <span class="cam-pill-sub" id="landing-cam-name-text">Sony α7 IV • 4K 60fps Ultra-Sense</span>
+        </div>
+      </div>
 
-    <div class="gesture-guide-pill">
-      <div class="guide-step">
-        <span class="guide-step-icon">✋</span>
-        <span>Open Palm = Move Cursor</span>
-      </div>
-      <div class="guide-step">
-        <span class="guide-step-icon">✊</span>
-        <span>Hold Fist = Select / Click</span>
-      </div>
-      <div class="guide-step">
-        <span class="guide-step-icon">✌️</span>
-        <span>Hold Peace = Snap Photo</span>
+      <div class="top-capabilities-row">
+        <div class="cap-badge">
+          <span class="cap-badge-dot"></span>
+          <span>4K Optical Ready</span>
+        </div>
+        <div class="cap-badge">
+          <span class="cap-badge-icon">✋</span>
+          <span>AI Gesture Active</span>
+        </div>
+        <div class="cap-badge">
+          <span class="cap-badge-icon" style="color: var(--col-yellow-dark);">⚡</span>
+          <span>Instant 300DPI Dye-Sub</span>
+        </div>
       </div>
     </div>
-    <div style="font-size: 11px; color: var(--col-text-3); font-weight: 600; margin-top: -12px;">
-      🚫 Touchpad & mouse dinonaktifkan • Kontrol 100% menggunakan gestur tangan
+
+    <!-- 2-COLUMN HERO GRID -->
+    <div class="landing-hero-grid">
+      <!-- LEFT CONTENT COLUMN -->
+      <div class="landing-content-col">
+        <div class="landing-edition-badge">
+          <span>✦</span>
+          <span>FIKSI 2026 SPECIAL EDITION • STUDIO KIOSK</span>
+        </div>
+
+        <h1 class="landing-hero-title">
+          Capture Your<br>
+          <span class="title-gradient-word">
+            Best Moment
+            <svg class="title-brush-underline" viewBox="0 0 240 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 13C65 4 175 4 236 12" stroke="#FDC00F" stroke-width="6" stroke-linecap="round"/>
+            </svg>
+          </span>
+        </h1>
+
+        <p class="landing-hero-sub">
+          Take photos, choose custom creator frames, and print instantly in ultra-fine exhibition quality. Fully touch-free or tap-ready.
+        </p>
+
+        <!-- ACTION ROW: PRIMARY CTA + AUTO DWELL -->
+        <div class="landing-action-row">
+          <button class="landing-primary-btn landing-cta-btn btn-interactive" onclick="doAction('start_camera')" title="Mulai Sesi Foto">
+            <div class="btn-icon-circle">⭐</div>
+            <div class="btn-text-group">
+              <span class="btn-main-label">Start Photo Session</span>
+              <span class="btn-sub-label">Mulai Sesi Foto Eksklusif</span>
+            </div>
+            <span class="btn-arrow-right">→</span>
+          </button>
+
+          <div class="landing-dwell-card">
+            <span class="dwell-icon">🤏</span>
+            <div class="dwell-info">
+              <span class="dwell-title">Auto Hover Dwell</span>
+              <span class="dwell-sub">Hold cursor to trigger</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- TOUCHLESS AI GESTURE CONTROL CARD -->
+        <div class="landing-gesture-card">
+          <div class="gesture-card-header">
+            <div class="gesture-header-title">
+              <span class="gesture-header-dot"></span>
+              <span>TOUCHLESS AI GESTURE CONTROL</span>
+            </div>
+            <span class="gesture-header-sub">Zero-contact interaction</span>
+          </div>
+
+          <div class="gesture-card-grid">
+            <div class="gesture-subcard">
+              <span class="gesture-subcard-icon">✋</span>
+              <span class="gesture-subcard-title">Open Palm</span>
+              <span class="gesture-subcard-desc">Move Cursor</span>
+            </div>
+            <div class="gesture-subcard">
+              <span class="gesture-subcard-icon">✊</span>
+              <span class="gesture-subcard-title">Fist Hold</span>
+              <span class="gesture-subcard-desc">Hold to Select</span>
+            </div>
+            <div class="gesture-subcard">
+              <span class="gesture-subcard-icon">✌️</span>
+              <span class="gesture-subcard-title">Peace Sign</span>
+              <span class="gesture-subcard-desc">Instant Snap</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT COLUMN: TILTED PHOTO STRIP MOCKUP -->
+      <div class="landing-mockup-col">
+        <div class="strip-mockup-container">
+          <!-- Top Floating Pill -->
+          <div class="float-pill-top">
+            <div class="float-pill-cursor-dot">
+              <div class="float-pill-cursor-inner"></div>
+            </div>
+            <div class="float-pill-text">
+              <span class="float-pill-title">Virtual AI Cursor</span>
+              <span class="float-pill-desc">Position tracking active</span>
+            </div>
+          </div>
+
+          <!-- Photobooth Strip Card (FramePhotoBooth1) -->
+          <div class="strip-mockup-card btn-interactive" onclick="doAction('start_camera')" title="Klik untuk mulai sesi">
+            <img class="landing-strip-img" src="/api/landing_sample_strip" alt="FIKSI Frame Photo Strip">
+          </div>
+
+          <!-- Bottom Floating Pill -->
+          <div class="float-pill-bottom">
+            <div class="float-pill-printer-icon">🖨️</div>
+            <div>
+              <div class="float-pill-count">1,482</div>
+              <div class="float-pill-count-sub">Prints completed today</div>
+            </div>
+            <div class="float-pill-qr-icon">📱</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BOTTOM FOOTER BAR -->
+    <div class="landing-bottom-bar">
+      <div class="footer-prompt-left">
+        <span class="footer-prompt-dot"></span>
+        <span>Touch screen or wave your hand to begin</span>
+        <span class="footer-prompt-sub">• Tekan layar atau lambaikan tangan</span>
+      </div>
+
+      <div class="footer-status-right">
+        <div class="footer-key-badge">
+          <span class="kbd-tag">SPACE</span>
+          <span>or Click to Start</span>
+        </div>
+        <div class="footer-paper-status">
+          <span class="footer-paper-dot"></span>
+          <span>Thermal Roll 84% Available</span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -7005,12 +7682,12 @@ function updateMiniCamera(screenName) {
   const miniStream = document.getElementById('mini-camera-stream');
   if (!miniCam) return;
 
-  const isCamera = (screenName === 'camera');
+  const isCamera = (screenName === 'camera' || screenName === 'landing');
   if (isCamera) {
     if (miniCam.classList.contains('visible')) {
       miniCam.classList.remove('visible');
     }
-    // Stop mini camera stream to save resources when on main camera screen
+    // Stop mini camera stream to save resources when on main camera screen or landing screen
     if (miniStream && miniStream.src && miniStream.src.indexOf('/video_feed') !== -1) {
       miniStream.src = '';
     }
@@ -7083,9 +7760,25 @@ function transitionToScreen(name) {
       if (el) el.src = `/api/photo_preview/${i}?t=${Date.now()}`;
     }
   }
+function handleLandingScreenClick(e) {
+  if (e.target.closest('button') || e.target.closest('.btn-interactive') || e.target.closest('.camera-status-pill') || e.target.closest('#settings-modal')) return;
+  doAction('start_camera');
 }
 
 function updateScreenContent(s, data) {
+  if (appState.screen === 'landing') {
+    const camNameEl = document.getElementById('landing-cam-name-text');
+    if (camNameEl && data.camera && data.camera.device_name) {
+      const fps = data.camera.actual_fps ? `${Math.round(data.camera.actual_fps)}fps` : '60fps';
+      const res = (data.camera.actual_width && data.camera.actual_height) ? `${data.camera.actual_width}x${data.camera.actual_height}` : '4K Optical';
+      camNameEl.textContent = `${data.camera.device_name} • ${res} ${fps}`;
+    }
+    const camStatusEl = document.getElementById('landing-cam-status-text');
+    if (camStatusEl) {
+      camStatusEl.textContent = appState.cameraOk ? 'Live Camera: Calibrated' : 'Live Camera: Connecting...';
+    }
+  }
+
   if (appState.screen === 'camera') {
     const retakeSlot = s.retake_slot_target;
     if (retakeSlot) {
@@ -7879,6 +8572,14 @@ function setupKeyboard() {
       e.stopPropagation();
       toggleSettings();
       return false;
+    }
+    if (e.key === ' ' || e.code === 'Space') {
+      if (appState.screen === 'landing' && !settingsOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        doAction('start_camera');
+        return false;
+      }
     }
     if (e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27) {
       if (settingsOpen) {
