@@ -360,6 +360,7 @@ class AppSession:
         self.countdown_active: bool = False
         self.countdown_value: int = 0
         self._payment_stop_event: Optional[threading.Event] = None
+        self.is_paid: bool = False
         self.reset()
 
     def reset(self):
@@ -377,6 +378,7 @@ class AppSession:
         self.payment_qr_data = None
         self.payment_amount = config["photobooth_price"]
         self.payment_expiry = None
+        self.is_paid = False
         self.print_state = "idle"
         self.print_started_mono = None
         self.last_activity = time.time()
@@ -409,6 +411,7 @@ class AppSession:
             "has_a4": bool(self.a4_image_path and os.path.exists(self.a4_image_path)),
             "cloud_download_url": self.cloud_download_url,
             "payment_state": self.payment_state,
+            "is_paid": bool(getattr(self, "is_paid", False) or self.payment_state == "success"),
             "payment_order_id": self.payment_order_id,
             "payment_amount": self.payment_amount,
             "payment_expiry": self.payment_expiry,
@@ -2241,6 +2244,11 @@ class SessionController:
             return True
 
     def start_payment(self):
+        with session_lock:
+            if getattr(session, "is_paid", False) or session.payment_state == "success":
+                print(f"[PAYMENT] Sesi {session.session_id} sudah lunas, langsung lanjut ke FRAMES")
+                self.transition(SessionState.FRAMES)
+                return
         self.transition(SessionState.PAYMENT)
         with session_lock:
             session.payment_state = "creating"
@@ -2301,6 +2309,7 @@ class SessionController:
                         break
                     if status in ("settlement", "capture"):
                         session.payment_state = "success"
+                        session.is_paid = True
                         stop_event.set()
                         print(f"[PAYMENT] Verified: {order_id}")
                         threading.Thread(
@@ -2453,13 +2462,26 @@ def cleanup_old_files():
     while True:
         time.sleep(300)
         try:
-            cutoff = time.time() - SESSION_CLEANUP_MIN * 60
-            for f in glob.glob(str(PHOTOS_DIR / "*.jpg")):
-                if os.path.getmtime(f) < cutoff:
-                    try:
-                        os.remove(f)
-                    except Exception:
-                        pass
+            now = time.time()
+            cutoff_raw = now - SESSION_CLEANUP_MIN * 60
+            cutoff_final = now - (SESSION_CLEANUP_MIN * 24 * 60)  # Keep print sheets & final photos for 24h
+            for f in glob.glob(str(PHOTOS_DIR / "*")):
+                if not os.path.isfile(f):
+                    continue
+                fn = os.path.basename(f).lower()
+                mtime = os.path.getmtime(f)
+                if "_a4" in fn or "_final" in fn:
+                    if mtime < cutoff_final:
+                        try:
+                            os.remove(f)
+                        except Exception:
+                            pass
+                else:
+                    if mtime < cutoff_raw:
+                        try:
+                            os.remove(f)
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -2679,6 +2701,7 @@ def api_state():
             "expiry": payment_expiry,
             "has_qr": bool(payment_qr),
             "mode": config.get("payment_mode", "manual"),
+            "is_paid": bool(getattr(session, "is_paid", False) or payment_state == "success"),
         },
         "debug": {
             "show_fps": config["show_fps"],
@@ -2879,11 +2902,17 @@ def api_action():
 
     elif action == "use_photos":
         if session.state == SessionState.REVIEW:
-            ctrl.start_payment()
+            with session_lock:
+                already_paid = bool(getattr(session, "is_paid", False) or session.payment_state == "success")
+            if already_paid:
+                print(f"[ACTION] use_photos: sesi {session.session_id} sudah lunas, langsung lanjut ke FRAMES")
+                ctrl.transition(SessionState.FRAMES)
+            else:
+                ctrl.start_payment()
             return jsonify({"ok": True})
 
     elif action == "back_to_review":
-        if session.state in (SessionState.PAYMENT, SessionState.FRAMES):
+        if session.state in (SessionState.PAYMENT, SessionState.FRAMES, SessionState.PREVIEW):
             ctrl.stop_payment_poll()
             ctrl.transition(SessionState.REVIEW)
             return jsonify({"ok": True})
@@ -2970,19 +2999,24 @@ def api_action():
                 oid = session.payment_order_id
             if oid:
                 DemoPaymentProvider().simulate_success(oid)
+                with session_lock:
+                    session.payment_state = "success"
+                    session.is_paid = True
                 return jsonify({"ok": True})
         return jsonify({"ok": False, "error": "Not in demo mode"})
 
     elif action == "confirm_manual_payment":
-        if session.state == SessionState.PAYMENT:
+        if session.state in (SessionState.PAYMENT, SessionState.REVIEW, SessionState.FRAMES):
             with session_lock:
                 session.payment_state = "success"
+                session.is_paid = True
                 session.payment_expiry = None
                 print(f"[PAYMENT] Manual QRIS confirmed by operator: {session.session_id}")
             ctrl.stop_payment_poll()
-            ctrl.transition(SessionState.FRAMES)
+            if session.state == SessionState.PAYMENT:
+                ctrl.transition(SessionState.FRAMES)
             return jsonify({"ok": True})
-        return jsonify({"ok": False, "error": "Not in payment state"})
+        return jsonify({"ok": False, "error": "Cannot confirm payment in current state"})
 
     return jsonify({"ok": False, "error": f"Unknown action: {action}"})
 
@@ -3076,7 +3110,11 @@ def api_photo_preview(idx: int):
     path = paths[idx - 1]
     if not path or not os.path.exists(path):
         abort(404)
-    return send_file(path, mimetype="image/jpeg")
+    resp = send_file(path, mimetype="image/jpeg")
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 @app.route("/api/a4_preview")
 def api_a4_preview():
@@ -3108,6 +3146,123 @@ def api_final_photo():
         resp.headers["Expires"] = "0"
         return resp
     abort(404)
+
+@app.route("/api/saved_photos")
+def api_saved_photos():
+    """Returns list of all saved photos and print sheets from PHOTOS_DIR."""
+    try:
+        files = []
+        total_bytes = 0
+        valid_exts = {".jpg", ".jpeg", ".png", ".pdf"}
+        if PHOTOS_DIR.exists():
+            for entry in os.scandir(PHOTOS_DIR):
+                if entry.is_file():
+                    ext = os.path.splitext(entry.name)[1].lower()
+                    if ext in valid_exts:
+                        stat = entry.stat()
+                        total_bytes += stat.st_size
+                        fn = entry.name.lower()
+                        if "_a4_landscape" in fn or "_a4" in fn:
+                            category = "print_sheet"
+                            category_label = "Sheet Cetak A4"
+                        elif "_final" in fn:
+                            category = "final_strip"
+                            category_label = "Strip Foto Final"
+                        elif "_photo_" in fn:
+                            category = "raw_photo"
+                            category_label = "Foto Sesi"
+                        else:
+                            category = "other"
+                            category_label = "File Gambar"
+
+                        size_kb = stat.st_size / 1024
+                        size_str = f"{size_kb:.1f} KB" if size_kb < 1024 else f"{size_kb/1024:.2f} MB"
+                        mtime_dt = datetime.datetime.fromtimestamp(stat.st_mtime)
+                        date_str = mtime_dt.strftime("%d/%m/%Y %H:%M:%S")
+
+                        files.append({
+                            "filename": entry.name,
+                            "category": category,
+                            "category_label": category_label,
+                            "size_bytes": stat.st_size,
+                            "size_str": size_str,
+                            "mtime": stat.st_mtime,
+                            "date_str": date_str,
+                            "url": f"/api/saved_photo/{urllib.parse.quote(entry.name)}"
+                        })
+
+        files.sort(key=lambda x: x["mtime"], reverse=True)
+        total_mb = f"{total_bytes / (1024 * 1024):.2f} MB"
+        return jsonify({
+            "ok": True,
+            "photos": files,
+            "total_count": len(files),
+            "total_size": total_mb,
+            "photos_dir": str(PHOTOS_DIR.resolve())
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "photos": []}), 500
+
+@app.route("/api/saved_photo/<path:filename>")
+def api_saved_photo(filename):
+    """Safely serves saved photo file from PHOTOS_DIR."""
+    safe_name = os.path.basename(filename)
+    file_path = PHOTOS_DIR / safe_name
+    if not file_path.exists():
+        abort(404)
+    mtype = "application/pdf" if safe_name.lower().endswith(".pdf") else "image/jpeg"
+    resp = send_file(str(file_path), mimetype=mtype)
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return resp
+
+@app.route("/api/print_saved_photo", methods=["POST"])
+def api_print_saved_photo():
+    """Prints a specific saved photo file to the configured printer."""
+    data = request.json or {}
+    filename = data.get("filename")
+    if not filename:
+        return jsonify({"ok": False, "error": "Filename is required"}), 400
+    safe_name = os.path.basename(filename)
+    file_path = str(PHOTOS_DIR / safe_name)
+    if not os.path.exists(file_path):
+        return jsonify({"ok": False, "error": "File does not exist"}), 404
+    ok, msg = printer_manager.print_image(file_path)
+    return jsonify({
+        "ok": ok,
+        "message": msg if ok else f"Print failed: {msg}"
+    })
+
+@app.route("/api/delete_saved_photo", methods=["POST"])
+def api_delete_saved_photo():
+    """Deletes a specific saved photo from PHOTOS_DIR."""
+    data = request.json or {}
+    filename = data.get("filename")
+    if not filename:
+        return jsonify({"ok": False, "error": "Filename is required"}), 400
+    safe_name = os.path.basename(filename)
+    file_path = PHOTOS_DIR / safe_name
+    if not file_path.exists():
+        return jsonify({"ok": False, "error": "File not found"}), 404
+    try:
+        os.remove(file_path)
+        return jsonify({"ok": True, "message": f"Berhasil menghapus {safe_name}"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/open_photos_folder", methods=["POST"])
+def api_open_photos_folder():
+    """Opens the photos directory in Windows File Explorer."""
+    try:
+        PHOTOS_DIR.mkdir(exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(str(PHOTOS_DIR.resolve()))
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(PHOTOS_DIR.resolve())], check=False)
+        else:
+            subprocess.run(["xdg-open", str(PHOTOS_DIR.resolve())], check=False)
+        return jsonify({"ok": True, "message": "Folder dibuka di file manager"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/settings", methods=["GET", "POST"])
 def api_settings():
@@ -3166,6 +3321,7 @@ def payment_webhook():
         if session.payment_order_id == order_id:
             if status in ("settlement", "capture"):
                 session.payment_state = "success"
+                session.is_paid = True
                 ctrl.stop_payment_poll()
     return jsonify({"ok": True})
 
@@ -3403,11 +3559,11 @@ CASHIER_TEMPLATE = r"""<!DOCTYPE html>
           if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
         }
         lastState = 'waiting';
-      } else if (screen === 'payment' && payState === 'success') {
-        pill.textContent = '✓ SUDAH TERBAYAR';
+      } else if (s.is_paid || p.is_paid || payState === 'success') {
+        pill.textContent = '✓ SUDAH LUNAS';
         pill.className = 'status-pill status-paid';
         btn.disabled = true;
-        btn.innerHTML = '<span>✓ PEMBAYARAN SUKSES</span>';
+        btn.innerHTML = '<span>✓ PEMBAYARAN SUDAH LUNAS</span>';
         lastState = 'paid';
       } else {
         pill.textContent = `LAYAR BOOTH: ${screen.toUpperCase()}`;
@@ -5261,6 +5417,340 @@ body.dark-mode .settings-footer .btn-ghost:hover {
   color: #fff;
 }
 
+/* ============================================================ */
+/* SETTINGS GALLERY (SAVED PHOTOS & PRINTS)                      */
+/* ============================================================ */
+.gallery-stats-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--col-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+
+body.dark-mode .gallery-stats-bar {
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.gal-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--col-text);
+}
+
+.gal-stat-label {
+  color: var(--col-text-2);
+}
+
+.gal-stat-path {
+  margin-left: auto;
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gallery-filter-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.gal-filter-btn {
+  background: var(--col-surface-2);
+  border: 1px solid var(--col-border);
+  color: var(--col-text-2);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--tr-fast);
+}
+
+.gal-filter-btn:hover {
+  background: rgba(88, 78, 184, 0.12);
+  color: var(--col-text);
+}
+
+.gal-filter-btn.active {
+  background: var(--col-blue-1);
+  border-color: var(--col-blue-1);
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(88, 78, 184, 0.3);
+}
+
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.gallery-card {
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: transform var(--tr-fast), box-shadow var(--tr-fast), border-color var(--tr-fast);
+}
+
+.gallery-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  border-color: rgba(88, 78, 184, 0.35);
+}
+
+body.dark-mode .gallery-card {
+  background: #171A27;
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+body.dark-mode .gallery-card:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  border-color: rgba(167, 139, 250, 0.4);
+}
+
+.gallery-thumb-wrap {
+  position: relative;
+  width: 100%;
+  height: 165px;
+  background: #080A0F;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.gallery-thumb {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transition: transform var(--tr-fast);
+}
+
+.gallery-thumb-wrap:hover .gallery-thumb {
+  transform: scale(1.04);
+}
+
+.gallery-card-badge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 4px;
+  backdrop-filter: blur(8px);
+  z-index: 2;
+}
+
+.badge-print-sheet {
+  background: rgba(14, 165, 233, 0.90);
+  color: #fff;
+}
+
+.badge-final-strip {
+  background: rgba(234, 179, 8, 0.92);
+  color: #111;
+}
+
+.badge-raw-photo {
+  background: rgba(107, 114, 128, 0.85);
+  color: #fff;
+}
+
+.badge-other {
+  background: rgba(139, 92, 246, 0.85);
+  color: #fff;
+}
+
+.gallery-card-size {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.70);
+  color: #fff;
+  backdrop-filter: blur(6px);
+  z-index: 2;
+}
+
+.gallery-card-info {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.gallery-card-date {
+  font-size: 11px;
+  color: var(--col-text-2);
+  font-weight: 600;
+}
+
+.gallery-card-filename {
+  font-family: monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--col-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gallery-card-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--col-border);
+  margin-top: auto;
+  align-items: center;
+}
+
+.gal-act-btn {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 6px;
+  border: 1px solid var(--col-border);
+  background: var(--col-surface-2);
+  color: var(--col-text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: all var(--tr-fast);
+}
+
+.gal-act-btn:hover {
+  background: var(--col-blue-1);
+  color: #fff;
+  border-color: var(--col-blue-1);
+}
+
+.gal-act-btn.btn-print {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--col-success);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.gal-act-btn.btn-print:hover {
+  background: var(--col-success);
+  color: #fff;
+}
+
+.gal-act-btn.btn-del {
+  flex: 0 0 32px;
+  color: var(--col-error);
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.gal-act-btn.btn-del:hover {
+  background: var(--col-error);
+  color: #fff;
+}
+
+.gallery-empty {
+  text-align: center;
+  padding: 48px 24px;
+  color: var(--col-text-2);
+}
+
+.gallery-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 48px 24px;
+  color: var(--col-text-2);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* GALLERY ZOOM MODAL */
+#gallery-zoom-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.88);
+  backdrop-filter: blur(12px);
+  z-index: 12000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.gallery-zoom-card {
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
+  border-radius: 16px;
+  max-width: 90vw;
+  max-height: 90vh;
+  width: 820px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+}
+
+body.dark-mode .gallery-zoom-card {
+  background: #171A27;
+}
+
+.gallery-zoom-header {
+  padding: 12px 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--col-border);
+}
+
+.gallery-zoom-body {
+  flex: 1;
+  min-height: 0;
+  background: #080A0F;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  overflow: auto;
+}
+
+#gal-zoom-img {
+  max-width: 100%;
+  max-height: 62vh;
+  object-fit: contain;
+  border-radius: 6px;
+}
+
+.gallery-zoom-footer {
+  padding: 12px 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--col-border);
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 /* Toast */
 #toast {
   position: fixed;
@@ -5363,6 +5853,10 @@ body.dark-mode .settings-footer .btn-ghost:hover {
     <div class="brand-badge">Photo Review</div>
     <h2 style="font-size: var(--text-2xl); font-weight: 800;">Review Your Photos</h2>
     <p style="font-size: var(--text-sm); color: var(--col-text-2); margin-top: -12px;">Klik pada foto untuk melihat lebih jelas (zoom) atau mengulang foto tersebut.</p>
+    <div id="rev-paid-badge" style="display: none; align-items: center; gap: 8px; background: rgba(16, 185, 129, 0.12); border: 1.5px solid rgba(16, 185, 129, 0.35); color: var(--col-success); padding: 8px 20px; border-radius: var(--r-full); font-weight: 700; font-size: var(--text-sm); margin-top: -6px;">
+      <span style="display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; background:var(--col-success); color:#fff; border-radius:50%; font-size:12px; font-weight:900;">✓</span>
+      <span>Pembayaran Terkonfirmasi — Foto ulang sepuasnya tanpa bayar lagi</span>
+    </div>
     <div class="review-grid">
       <div class="review-card btn-interactive" onclick="openPhotoZoom(1)">
         <img id="rev-photo-1" src="" alt="Photo 1">
@@ -5379,7 +5873,7 @@ body.dark-mode .settings-footer .btn-ghost:hover {
     </div>
     <div class="review-actions">
       <button class="btn btn-ghost btn-interactive" onclick="doAction('retake_all')">↺ Retake All</button>
-      <button class="btn btn-primary btn-interactive" onclick="doAction('use_photos')">Continue to Payment →</button>
+      <button class="btn btn-primary btn-interactive" id="btn-use-photos" onclick="doAction('use_photos')">Continue to Payment →</button>
     </div>
   </div>
 
@@ -5636,6 +6130,7 @@ body.dark-mode .settings-footer .btn-ghost:hover {
         <div class="settings-nav-item" onclick="showSettingsSection('gesture')">🤚 Gesture</div>
         <div class="settings-nav-item" onclick="showSettingsSection('display')">🖥 Display</div>
         <div class="settings-nav-item" onclick="showSettingsSection('print')">🖨 Print</div>
+        <div class="settings-nav-item" data-section="gallery" onclick="showSettingsSection('gallery')" style="background: rgba(253, 192, 15, 0.12); color: var(--col-yellow); font-weight: 700; border: 1px solid rgba(253, 192, 15, 0.25);">📁 Galeri Cetak</div>
         <div class="settings-nav-item" onclick="showSettingsSection('photo')">🎞 Photo</div>
         <div class="settings-nav-item" onclick="showSettingsSection('payment')">💳 Payment</div>
         <div class="settings-nav-item" onclick="showSettingsSection('system')">⚡ System</div>
@@ -5940,6 +6435,77 @@ body.dark-mode .settings-footer .btn-ghost:hover {
           </div>
         </div>
 
+        <!-- GALLERY / SAVED PHOTOS -->
+        <div class="settings-section" id="settings-gallery">
+          <div class="settings-group">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;">
+              <div>
+                <div class="settings-group-title" style="margin: 0; font-size: 14px;">📁 Galeri Hasil Cetak & Foto Sesi</div>
+                <p style="font-size: 12px; color: var(--col-text-2); margin-top: 4px;">
+                  Daftar seluruh lembar cetak A4 dan strip foto yang tersimpan di laptop. Anda dapat melihat, mencetak ulang ke printer, atau membuka foldernya langsung.
+                </p>
+              </div>
+              <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                <button class="btn btn-ghost" onclick="loadSavedPhotos()" title="Muat ulang daftar foto" style="padding: 8px 14px; font-size: 12px;">
+                  🔄 Refresh
+                </button>
+                <button class="btn btn-secondary" onclick="openPhotosFolderInExplorer()" title="Buka folder photos di Windows Explorer" style="padding: 8px 14px; font-size: 12px;">
+                  📂 Buka Folder di Laptop
+                </button>
+              </div>
+            </div>
+
+            <!-- Stats & Info Bar -->
+            <div class="gallery-stats-bar">
+              <div class="gal-stat-pill">
+                <span class="gal-stat-label">Total File:</span>
+                <strong id="gal-total-count">0</strong>
+              </div>
+              <div class="gal-stat-pill">
+                <span class="gal-stat-label">Ukuran Disk:</span>
+                <strong id="gal-total-size">0 MB</strong>
+              </div>
+              <div class="gal-stat-pill gal-stat-path">
+                <span class="gal-stat-label">Lokasi:</span>
+                <code id="gal-folder-path" title="Lokasi folder penyimpanan">photos/</code>
+              </div>
+            </div>
+
+            <!-- Category Filter Tabs -->
+            <div class="gallery-filter-tabs">
+              <button class="gal-filter-btn active" data-filter="all" onclick="filterGallery('all')">
+                Semua File (<span id="gal-filter-count-all">0</span>)
+              </button>
+              <button class="gal-filter-btn" data-filter="print_sheet" onclick="filterGallery('print_sheet')">
+                🖨️ Sheet Cetak A4 12cm (<span id="gal-filter-count-print_sheet">0</span>)
+              </button>
+              <button class="gal-filter-btn" data-filter="final_strip" onclick="filterGallery('final_strip')">
+                🎞️ Strip Frame Final (<span id="gal-filter-count-final_strip">0</span>)
+              </button>
+              <button class="gal-filter-btn" data-filter="raw_photo" onclick="filterGallery('raw_photo')">
+                📷 Foto Sesi (<span id="gal-filter-count-raw_photo">0</span>)
+              </button>
+            </div>
+
+            <!-- Loading & Empty States -->
+            <div id="gallery-loading" class="gallery-loading" style="display: none;">
+              <div class="spinner"></div>
+              <span>Memuat daftar foto dari laptop...</span>
+            </div>
+
+            <div id="gallery-empty" class="gallery-empty" style="display: none;">
+              <div style="font-size: 36px; margin-bottom: 8px;">📭</div>
+              <div style="font-weight: 700; font-size: 14px;">Belum Ada Foto Tersimpan</div>
+              <div style="font-size: 12px; color: var(--col-text-3); margin-top: 4px;">
+                Foto akan otomatis tersimpan di folder ini setiap kali sesi foto atau tombol print dijalankan.
+              </div>
+            </div>
+
+            <!-- Grid of Cards -->
+            <div class="gallery-grid" id="gallery-grid"></div>
+          </div>
+        </div>
+
         <!-- PHOTO -->
         <div class="settings-section" id="settings-photo">
           <div class="settings-group">
@@ -6026,6 +6592,33 @@ body.dark-mode .settings-footer .btn-ghost:hover {
     <div class="settings-footer">
       <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
       <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
+    </div>
+  </div>
+</div>
+
+<!-- GALLERY FULL IMAGE MODAL -->
+<div id="gallery-zoom-modal" style="display: none;" onclick="closeGalleryZoom()">
+  <div class="gallery-zoom-card" onclick="event.stopPropagation()">
+    <div class="gallery-zoom-header">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span id="gal-zoom-badge" class="badge" style="background:var(--col-blue-1); color:#fff; font-size:10px; padding:3px 8px; border-radius:4px; font-weight:800;">A4 SHEET</span>
+        <span id="gal-zoom-filename" style="font-weight: 700; font-size: 13px; font-family: monospace;">filename.jpg</span>
+      </div>
+      <button class="settings-close-btn" onclick="closeGalleryZoom()">✕</button>
+    </div>
+    <div class="gallery-zoom-body">
+      <img id="gal-zoom-img" src="" alt="Zoom Photo">
+    </div>
+    <div class="gallery-zoom-footer">
+      <div style="font-size: 12px; color: var(--col-text-2);" id="gal-zoom-info">315 KB • 01/10/2026 09:24</div>
+      <div style="display: flex; gap: 8px;">
+        <a id="gal-zoom-download-btn" href="" target="_blank" download class="btn btn-ghost" style="padding: 7px 16px; font-size: 12px; text-decoration: none;">
+          ⬇ Download / Buka
+        </a>
+        <button id="gal-zoom-print-btn" class="btn btn-primary" onclick="printSavedPhotoFromZoom()" style="padding: 7px 18px; font-size: 12px;">
+          🖨 Cetak ke Printer Sekarang
+        </button>
+      </div>
     </div>
   </div>
 </div>
@@ -6264,6 +6857,7 @@ function updateState(data) {
 
   appState.photoCount = s.photo_slots_filled;
   appState.paymentState = s.payment_state;
+  appState.isPaid = !!(s.is_paid || (data.payment && data.payment.is_paid) || s.payment_state === 'success');
   appState.paymentAmount = data.payment.amount;
   appState.paymentExpiry = data.payment.expiry;
   appState.paymentMode = data.payment.mode || 'manual';
@@ -6429,6 +7023,19 @@ function updateScreenContent(s, data) {
       if (el && (!el.src || el.src.endsWith('/'))) {
         el.src = `/api/photo_preview/${i}?t=${Date.now()}`;
       }
+    }
+    const isPaid = !!(s.is_paid || (data.payment && data.payment.is_paid) || s.payment_state === 'success' || appState.isPaid);
+    const btnUse = document.getElementById('btn-use-photos');
+    if (btnUse) {
+      if (isPaid) {
+        btnUse.innerHTML = '<span>Lanjut Pilih Frame (Lunas ✓) →</span>';
+      } else {
+        btnUse.innerHTML = '<span>Continue to Payment →</span>';
+      }
+    }
+    const badgePaid = document.getElementById('rev-paid-badge');
+    if (badgePaid) {
+      badgePaid.style.display = isPaid ? 'inline-flex' : 'none';
     }
   }
 
@@ -7422,8 +8029,222 @@ function showSettingsSection(name) {
   document.querySelectorAll('.settings-section').forEach(s => s.classList.remove('active'));
   document.getElementById(`settings-${name}`)?.classList.add('active');
   document.querySelectorAll('.settings-nav-item').forEach(item => {
-    item.classList.toggle('active', item.textContent.toLowerCase().includes(name));
+    const isTarget = item.getAttribute('data-section') === name || item.textContent.toLowerCase().includes(name);
+    item.classList.toggle('active', isTarget);
   });
+  if (name === 'gallery') {
+    loadSavedPhotos();
+  }
+}
+
+// ============================================================
+// ADMIN SETTINGS GALLERY (SAVED PHOTOS & PRINTS)
+// ============================================================
+let savedPhotosList = [];
+let currentGalleryFilter = 'all';
+let currentZoomPhoto = null;
+
+async function loadSavedPhotos() {
+  const loading = document.getElementById('gallery-loading');
+  const empty = document.getElementById('gallery-empty');
+  const grid = document.getElementById('gallery-grid');
+  if (loading) loading.style.display = 'flex';
+  if (empty) empty.style.display = 'none';
+  if (grid) grid.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/saved_photos');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    savedPhotosList = data.photos || [];
+
+    const totalCountEl = document.getElementById('gal-total-count');
+    const totalSizeEl = document.getElementById('gal-total-size');
+    const folderPathEl = document.getElementById('gal-folder-path');
+    if (totalCountEl) totalCountEl.textContent = data.total_count || 0;
+    if (totalSizeEl) totalSizeEl.textContent = data.total_size || '0 MB';
+    if (folderPathEl) {
+      folderPathEl.textContent = data.photos_dir || 'photos/';
+      folderPathEl.title = `Lokasi: ${data.photos_dir || 'photos/'}`;
+    }
+
+    const printCount = savedPhotosList.filter(p => p.category === 'print_sheet').length;
+    const finalCount = savedPhotosList.filter(p => p.category === 'final_strip').length;
+    const rawCount = savedPhotosList.filter(p => p.category === 'raw_photo').length;
+
+    const cAll = document.getElementById('gal-filter-count-all');
+    const cPrint = document.getElementById('gal-filter-count-print_sheet');
+    const cFinal = document.getElementById('gal-filter-count-final_strip');
+    const cRaw = document.getElementById('gal-filter-count-raw_photo');
+    if (cAll) cAll.textContent = savedPhotosList.length;
+    if (cPrint) cPrint.textContent = printCount;
+    if (cFinal) cFinal.textContent = finalCount;
+    if (cRaw) cRaw.textContent = rawCount;
+
+    renderGallery();
+  } catch (e) {
+    showToast(`Gagal memuat galeri: ${e.message}`, 3000);
+  } finally {
+    if (loading) loading.style.display = 'none';
+  }
+}
+
+function filterGallery(filter) {
+  currentGalleryFilter = filter;
+  document.querySelectorAll('.gal-filter-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-filter') === filter);
+  });
+  renderGallery();
+}
+
+function renderGallery() {
+  const grid = document.getElementById('gallery-grid');
+  const empty = document.getElementById('gallery-empty');
+  if (!grid) return;
+
+  const filtered = savedPhotosList.filter(item => {
+    if (currentGalleryFilter === 'all') return true;
+    return item.category === currentGalleryFilter;
+  });
+
+  if (filtered.length === 0) {
+    grid.innerHTML = '';
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+
+  if (empty) empty.style.display = 'none';
+
+  grid.innerHTML = filtered.map(p => {
+    const isSheet = p.category === 'print_sheet';
+    const isFinal = p.category === 'final_strip';
+    const badgeClass = isSheet ? 'badge-print-sheet' : (isFinal ? 'badge-final-strip' : 'badge-raw-photo');
+    const badgeText = isSheet ? '🖨️ A4 Sheet 12cm' : (isFinal ? '🎞️ Strip Final' : '📷 Foto Sesi');
+
+    return `
+      <div class="gallery-card">
+        <div class="gallery-thumb-wrap" onclick="openGalleryZoom('${encodeURIComponent(p.filename)}')">
+          <span class="gallery-card-badge ${badgeClass}">${badgeText}</span>
+          <span class="gallery-card-size">${p.size_str}</span>
+          <img class="gallery-thumb" src="${p.url}" alt="${p.filename}" loading="lazy">
+        </div>
+        <div class="gallery-card-info">
+          <div class="gallery-card-date">🕒 ${p.date_str}</div>
+          <div class="gallery-card-filename" title="${p.filename}">${p.filename}</div>
+        </div>
+        <div class="gallery-card-actions">
+          <button class="gal-act-btn btn-print" onclick="printSavedPhoto('${encodeURIComponent(p.filename)}')" title="Cetak langsung foto ini ke printer">
+            <span>🖨️ Cetak</span>
+          </button>
+          <button class="gal-act-btn" onclick="openGalleryZoom('${encodeURIComponent(p.filename)}')" title="Lihat ukuran penuh">
+            <span>🔍 Zoom</span>
+          </button>
+          <a class="gal-act-btn" href="${p.url}" target="_blank" download="${p.filename}" title="Buka / Download file" style="text-decoration:none; flex:0 0 30px;">
+            <span>⬇</span>
+          </a>
+          <button class="gal-act-btn btn-del" onclick="deleteSavedPhoto('${encodeURIComponent(p.filename)}')" title="Hapus file ini dari laptop">
+            <span>🗑</span>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function openGalleryZoom(encodedName) {
+  const filename = decodeURIComponent(encodedName);
+  const photo = savedPhotosList.find(p => p.filename === filename);
+  if (!photo) return;
+  currentZoomPhoto = photo;
+
+  const modal = document.getElementById('gallery-zoom-modal');
+  const img = document.getElementById('gal-zoom-img');
+  const fnameEl = document.getElementById('gal-zoom-filename');
+  const badgeEl = document.getElementById('gal-zoom-badge');
+  const infoEl = document.getElementById('gal-zoom-info');
+  const dlBtn = document.getElementById('gal-zoom-download-btn');
+
+  if (img) img.src = photo.url;
+  if (fnameEl) fnameEl.textContent = photo.filename;
+  if (badgeEl) badgeEl.textContent = photo.category_label;
+  if (infoEl) infoEl.textContent = `${photo.size_str} • ${photo.date_str}`;
+  if (dlBtn) {
+    dlBtn.href = photo.url;
+    dlBtn.download = photo.filename;
+  }
+
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeGalleryZoom() {
+  const modal = document.getElementById('gallery-zoom-modal');
+  if (modal) modal.style.display = 'none';
+  const img = document.getElementById('gal-zoom-img');
+  if (img) img.src = '';
+  currentZoomPhoto = null;
+}
+
+async function printSavedPhoto(encodedName) {
+  const filename = decodeURIComponent(encodedName);
+  showToast(`Mengirim ${filename} ke printer...`, 2500);
+  try {
+    const res = await fetch('/api/print_saved_photo', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({filename: filename})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(`✅ Berhasil dicetak: ${data.message}`, 4000);
+    } else {
+      showToast(`❌ Gagal mencetak: ${data.message || data.error}`, 5000);
+    }
+  } catch (e) {
+    showToast(`❌ Error print: ${e.message}`, 4000);
+  }
+}
+
+function printSavedPhotoFromZoom() {
+  if (currentZoomPhoto) {
+    printSavedPhoto(encodeURIComponent(currentZoomPhoto.filename));
+  }
+}
+
+async function deleteSavedPhoto(encodedName) {
+  const filename = decodeURIComponent(encodedName);
+  if (!confirm(`Hapus file ${filename} dari laptop?`)) return;
+
+  try {
+    const res = await fetch('/api/delete_saved_photo', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({filename: filename})
+    });
+    const data = await res.json();
+    if (data.ok) {
+      showToast(`🗑️ ${filename} berhasil dihapus`);
+      savedPhotosList = savedPhotosList.filter(p => p.filename !== filename);
+      renderGallery();
+    } else {
+      showToast(`Gagal menghapus: ${data.error}`);
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`);
+  }
+}
+
+async function openPhotosFolderInExplorer() {
+  try {
+    const res = await fetch('/api/open_photos_folder', {method: 'POST'});
+    const data = await res.json();
+    if (data.ok) {
+      showToast('📂 Folder photos dibuka di Windows Explorer');
+    } else {
+      showToast(`Gagal membuka folder: ${data.error}`);
+    }
+  } catch (e) {
+    showToast(`Error: ${e.message}`);
+  }
 }
 
 async function settingsAction(action) {
