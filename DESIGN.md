@@ -25,34 +25,31 @@ PhotoboothEXPO-FIKSI dirancang dengan prinsip **Modern Studio Aesthetic, Zero Fr
 
 ## 2. Sistem Desain & Token Visual (*Design System Tokens*)
 
-### 2.1 Palet Warna (*Color Palette*)
-Sistem menggunakan CSS Custom Properties terpusat yang mendukung tema terang/gelap:
+### 2.1 Palet Warna Resmi RTS (*Rencana Tuhan Studio Palette*)
+Sistem menggunakan token warna resmi RTS:
 
-| Token CSS | Kode Warna | Penggunaan Utama |
+| Elemen / Token | Kode Warna | Penggunaan Utama |
 | :--- | :--- | :--- |
-| `--col-bg` | `#0D0F17` | Latar belakang kanvas aplikasi utama |
-| `--col-surface` | `#171A26` | Permukaan kartu, panel kontrol, modal |
-| `--col-surface-2` | `#212638` | Kartu sekunder, input, baris data diagnostik |
-| `--col-border` | `rgba(255, 255, 255, 0.10)` | Garis batas subtil untuk kedalaman antarmuka |
-| `--col-border-focus` | `#FDC00F` | Garis batas aktif saat di-hover kursor gestur |
-| `--col-yellow` | `#FDC00F` | Warna aksen utama (Brand, CTA Konfirmasi, Fokus) |
-| `--col-primary` | `#584EB8` | Aksen sekunder (Gradien brand, tombol sekunder) |
-| `--col-success` | `#10B981` | Status Lunas, kamera terhubung, konfirmasi sukses |
-| `--col-danger` | `#EF4444` | Notifikasi error, reset, tombol hapus foto |
-| `--col-text` | `#FFFFFF` | Tipografi primer (Judul, teks kontras tinggi) |
-| `--col-text-2` | `#9CA3AF` | Tipografi sekunder (Instruksi, keterangan, subtitle) |
-| `--col-text-3` | `#6B7280` | Tipografi tersier (Metadata, ukuran file, hint kecil) |
+| **Kuning** (`--col-yellow`) | `#FDC00F` | Aksen brand utama, badge bintang ⭐, highlight, button sub-label |
+| **Biru** (`--col-blue`, `--col-blue-2`) | `#3C478E` | Aksen biru RTS, border fokus, icon indikator, tag status |
+| **Biru Gradient** (`--grad-blue`) | `#584EB8` → `#3C478E` | Gradien tombol CTA utama, judul hero gradient, aksen header |
+| **Gradien Biru Lembut** (`--grad-blue-soft`) | `rgba(88,78,184,0.08)` → `rgba(60,71,142,0.06)` | Latar belakang badge, kartu aktif gestur |
+| `--col-bg` | `#FFFFFF` (Light) / `#0D0F14` (Dark) | Latar belakang kanvas booth |
+| `--col-surface` | `#FFFFFF` (Light) / `#161820` (Dark) | Permukaan kartu, panel kontrol, modal |
+| `--col-border` | `rgba(60, 71, 142, 0.12)` | Border halus aksen biru RTS |
+| `--col-success` | `#22C55E` | Status Lunas, kamera terhubung, indikator aktif |
+| `--col-error` | `#EF4444` | Notifikasi error, offline, tombol hapus foto |
+| `--col-text` | `#111318` | Tipografi primer (Judul, teks kontras tinggi) |
+| `--col-text-2` | `#6B6D76` | Tipografi sekunder (Instruksi, subtitle, deskripsi) |
+| `--col-text-3` | `#9B9DAA` | Tipografi tersier (Keterangan spesifikasi, detail kecil) |
 
-### 2.2 Tipografi (*Typography*)
-* **Font Family**: `'Poppins', -apple-system, BlinkMacSystemFont, sans-serif`
-* **Skala Tipografi**:
-  * Display / Hero: `42px` (Font Weight 900)
-  * Heading 1 (Title): `32px` (Font Weight 800)
-  * Heading 2 (Screen): `24px` (Font Weight 700)
-  * Body Large: `16px` (Font Weight 600)
-  * Body Regular: `14px` (Font Weight 400)
-  * Caption / Label: `12px` (Font Weight 500)
-  * Micro / Badge: `10–11px` (Font Weight 700, Uppercase, Monospace untuk order ID)
+### 2.2 Tipografi (*Typography System*)
+* **Font Head & Subhead**: `'Coolvetica', 'Poppins', sans-serif`
+  * Digunakan untuk semua Judul (`h1`, `h2`, `h3`, `h4`), Hero Headline, Subhead, Brand Badge, Tombol CTA Utama, dan Chip Stat.
+  * Karakter: Tebal, geometris modern, punchy, dan berkarakter studio kiosk.
+* **Font Deskripsi & Body**: `'Poppins', sans-serif` (Regular 400 - Bold 700)
+  * Digunakan untuk teks deskripsi paragraf, panduan langkah, hint operasional, tombol sub-label, dan input pengaturan.
+  * Karakter: Sangat mudah dibaca (*high legibility*) dalam berbagai resolusi layar kiosk.
 
 ### 2.3 Bentuk & Bayangan (*Border Radius & Shadows*)
 * Radius Tombol: `--r-lg: 16px` | `--r-xl: 24px` | Pill: `--r-full: 9999px`
