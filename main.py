@@ -3381,6 +3381,26 @@ def api_landing_strip():
             pass
     abort(404)
 
+@app.route("/assets/<path:filename>")
+def serve_assets(filename: str):
+    file_path = ASSETS_DIR / filename
+    if not file_path.exists():
+        abort(404)
+    ext = file_path.suffix.lower()
+    mimetypes = {
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+        ".ttf": "font/ttf",
+        ".otf": "font/otf",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".svg": "image/svg+xml",
+        ".css": "text/css",
+    }
+    mimetype = mimetypes.get(ext, None)
+    return send_file(file_path, mimetype=mimetype)
+
 @app.route("/payment/webhook", methods=["POST"])
 def payment_webhook():
     data = request.json or {}
@@ -3720,9 +3740,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <meta name="description" content="Premium photo booth experience by Rencana Tuhan Studio">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<link href="https://fonts.cdnfonts.com/css/coolvetica" rel="stylesheet">
 <style>
 /* ============================================================
+   COOLVETICA LOCAL & REMOTE FONT DEFINITION
+   ============================================================ */
+@font-face {
+  font-family: 'Coolvetica';
+  font-style: normal;
+  font-weight: 400;
+  src: local('Coolvetica'), local('Coolvetica Regular'),
+       url('/assets/fonts/coolvetica.woff') format('woff'),
+       url('https://fonts.cdnfonts.com/s/13277/coolvetica.woff') format('woff');
+}
+
+/* ============================================================
    DESIGN SYSTEM — RENCANA TUHAN STUDIO PHOTO BOOTH
+   Color Palette RTS:
+     Kuning:        #FDC00F
+     Biru:          #3C478E
+     Biru Gradient: 584EB8 -> 3C478E
+   Fonts:
+     Font deskripsi:      Poppins Regular - Bold
+     Font Head & Subhead: Coolvetica Regular
    ============================================================ */
 :root {
   --col-bg: #FFFFFF;
@@ -3730,29 +3770,37 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   --col-bg-3: #EDEDF2;
   --col-surface: #FFFFFF;
   --col-surface-2: #F7F7FA;
-  --col-border: rgba(88,78,184,0.12);
+  --col-border: rgba(60, 71, 142, 0.12);
   --col-text: #111318;
   --col-text-2: #6B6D76;
   --col-text-3: #9B9DAA;
-  --col-blue-1: #584EB8;
-  --col-blue-2: #3C478E;
+
+  /* RTS OFFICIAL COLOR PALETTE */
   --col-yellow: #FDC00F;
   --col-yellow-dark: #D9A200;
+  --col-blue: #3C478E;
+  --col-blue-1: #584EB8;
+  --col-blue-2: #3C478E;
   --col-success: #22C55E;
   --col-error: #EF4444;
 
+  /* RTS Biru Gradient: #584EB8 -> #3C478E */
   --grad-blue: linear-gradient(135deg, #584EB8 0%, #3C478E 100%);
-  --grad-blue-soft: linear-gradient(135deg, rgba(88,78,184,0.08) 0%, rgba(60,71,142,0.06) 100%);
+  --grad-blue-soft: linear-gradient(135deg, rgba(88, 78, 184, 0.08) 0%, rgba(60, 71, 142, 0.06) 100%);
   --grad-yellow: linear-gradient(135deg, #FDC00F 0%, #F5A623 100%);
-  --grad-hero: radial-gradient(ellipse at 40% 50%, rgba(88,78,184,0.15) 0%, transparent 60%);
+  --grad-hero: radial-gradient(ellipse at 40% 50%, rgba(88, 78, 184, 0.12) 0%, transparent 60%);
 
-  --shadow-sm: 0 1px 3px rgba(17,19,24,0.08);
-  --shadow-md: 0 4px 16px rgba(17,19,24,0.10);
-  --shadow-lg: 0 16px 48px rgba(17,19,24,0.14);
-  --shadow-blue: 0 8px 32px rgba(88,78,184,0.22);
-  --shadow-yellow: 0 4px 20px rgba(253,192,15,0.35);
+  --shadow-sm: 0 1px 4px rgba(60, 71, 142, 0.08);
+  --shadow-md: 0 4px 16px rgba(60, 71, 142, 0.10);
+  --shadow-lg: 0 16px 48px rgba(60, 71, 142, 0.14);
+  --shadow-blue: 0 8px 30px rgba(88, 78, 184, 0.32);
+  --shadow-yellow: 0 4px 20px rgba(253, 192, 15, 0.35);
 
-  --font: 'Poppins', system-ui, sans-serif;
+  /* TYPOGRAPHY */
+  --font-body: 'Poppins', system-ui, -apple-system, sans-serif;
+  --font-head: 'Coolvetica', 'Poppins', system-ui, sans-serif;
+  --font: var(--font-body);
+
   --text-xs: clamp(10px, 1.2vw, 12px);
   --text-sm: clamp(12px, 1.4vw, 14px);
   --text-base: clamp(14px, 1.6vw, 16px);
@@ -3764,6 +3812,40 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   --r-sm: 8px; --r-md: 16px; --r-lg: 24px; --r-xl: 32px; --r-full: 999px;
   --tr-fast: 150ms ease;
   --tr-med: 250ms ease;
+}
+
+/* Head & Subhead typography rule */
+h1, h2, h3, h4,
+.landing-headline,
+.landing-title,
+.landing-subhead,
+.brand-badge,
+.landing-edition-badge,
+.landing-btn-main-label,
+.landing-dwell-title,
+.landing-gest-tag,
+.gest-card-name,
+.chip-title,
+.chip-stat-num,
+.camera-counter-badge,
+.countdown-number,
+.payment-amount,
+.dialog-title {
+  font-family: var(--font-head) !important;
+  letter-spacing: 0.6px;
+}
+
+body, p, span,
+.landing-subtext,
+.landing-btn-sub-label,
+.landing-dwell-sub,
+.gest-card-desc,
+.chip-subtitle,
+.landing-footer-txt,
+.landing-footer-sub,
+.settings-label,
+.settings-hint {
+  font-family: var(--font-body);
 }
 
 body.dark-mode {
@@ -3788,7 +3870,7 @@ body.dark-mode {
 html, body {
   width: 100vw; height: 100vh;
   overflow: hidden;
-  font-family: var(--font);
+  font-family: var(--font-body);
   background: var(--col-bg);
   color: var(--col-text);
   touch-action: none;
