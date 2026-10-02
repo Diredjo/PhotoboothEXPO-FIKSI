@@ -25,31 +25,42 @@ PhotoboothEXPO-FIKSI dirancang dengan prinsip **Modern Studio Aesthetic, Zero Fr
 
 ## 2. Sistem Desain & Token Visual (*Design System Tokens*)
 
-### 2.1 Palet Warna Resmi RTS (*Rencana Tuhan Studio Palette*)
-Sistem menggunakan token warna resmi RTS:
+### 2.1 Palet Warna (*Color Palette*)
+Sistem menggunakan CSS Custom Properties terpusat yang mendukung tema terang/gelap:
 
-| Elemen / Token | Kode Warna | Penggunaan Utama |
+| Token CSS | Kode Warna | Penggunaan Utama |
 | :--- | :--- | :--- |
-| **Kuning** (`--col-yellow`) | `#FDC00F` | Aksen brand utama, badge bintang ⭐, highlight, button sub-label |
-| **Biru** (`--col-blue`, `--col-blue-2`) | `#3C478E` | Aksen biru RTS, border fokus, icon indikator, tag status |
-| **Biru Gradient** (`--grad-blue`) | `#584EB8` → `#3C478E` | Gradien tombol CTA utama, judul hero gradient, aksen header |
-| **Gradien Biru Lembut** (`--grad-blue-soft`) | `rgba(88,78,184,0.08)` → `rgba(60,71,142,0.06)` | Latar belakang badge, kartu aktif gestur |
-| `--col-bg` | `#FFFFFF` (Light) / `#0D0F14` (Dark) | Latar belakang kanvas booth |
-| `--col-surface` | `#FFFFFF` (Light) / `#161820` (Dark) | Permukaan kartu, panel kontrol, modal |
-| `--col-border` | `rgba(60, 71, 142, 0.12)` | Border halus aksen biru RTS |
-| `--col-success` | `#22C55E` | Status Lunas, kamera terhubung, indikator aktif |
-| `--col-error` | `#EF4444` | Notifikasi error, offline, tombol hapus foto |
-| `--col-text` | `#111318` | Tipografi primer (Judul, teks kontras tinggi) |
-| `--col-text-2` | `#6B6D76` | Tipografi sekunder (Instruksi, subtitle, deskripsi) |
-| `--col-text-3` | `#9B9DAA` | Tipografi tersier (Keterangan spesifikasi, detail kecil) |
+| `--col-bg` | `#0D0F17` | Latar belakang kanvas aplikasi utama |
+| `--col-surface` | `#171A26` | Permukaan kartu, panel kontrol, modal |
+| `--col-surface-2` | `#212638` | Kartu sekunder, input, baris data diagnostik |
+| `--col-border` | `rgba(255, 255, 255, 0.10)` | Garis batas subtil untuk kedalaman antarmuka |
+| `--col-border-focus` | `#FDC00F` | Garis batas aktif saat di-hover kursor gestur |
+| `--col-yellow` | `#FDC00F` | Warna aksen utama (Brand, CTA Konfirmasi, Fokus) |
+| `--col-primary` | `#584EB8` | Aksen sekunder (Gradien brand, tombol sekunder) |
+| `--col-success` | `#10B981` | Status Lunas, kamera terhubung, konfirmasi sukses |
+| `--col-danger` | `#EF4444` | Notifikasi error, reset, tombol hapus foto |
+| `--col-text` | `#FFFFFF` | Tipografi primer (Judul, teks kontras tinggi) |
+| `--col-text-2` | `#9CA3AF` | Tipografi sekunder (Instruksi, keterangan, subtitle) |
+| `--col-text-3` | `#6B7280` | Tipografi tersier (Metadata, ukuran file, hint kecil) |
 
 ### 2.2 Tipografi (*Typography System*)
-* **Font Head & Subhead**: `'Coolvetica', 'Poppins', sans-serif`
-  * Digunakan untuk semua Judul (`h1`, `h2`, `h3`, `h4`), Hero Headline, Subhead, Brand Badge, Tombol CTA Utama, dan Chip Stat.
-  * Karakter: Tebal, geometris modern, punchy, dan berkarakter studio kiosk.
-* **Font Deskripsi & Body**: `'Poppins', sans-serif` (Regular 400 - Bold 700)
-  * Digunakan untuk teks deskripsi paragraf, panduan langkah, hint operasional, tombol sub-label, dan input pengaturan.
-  * Karakter: Sangat mudah dibaca (*high legibility*) dalam berbagai resolusi layar kiosk.
+Sistem tipografi aplikasi mengombinasikan font display modern untuk judul dan font geometris yang sangat terbaca untuk konten:
+
+* **Font Head & Subhead**: `'Coolvetica', 'Poppins', sans-serif` (Coolvetica Regular, Weight 400, Letter-spacing 0.5px)
+  * Digunakan untuk: Semua Judul (`h1`–`h6`), Subhead, Title Screen (`.screen h1/h2`), Hero Title (`.landing-title`), Subtitle (`.landing-sub`), Brand Badge (`.brand-badge`), Judul Modal (`.photo-zoom-header-title`, `.settings-header-title`), Header Grup Pengaturan (`.settings-group-title`), Nominal Pembayaran (`.payment-amount`, `.amount-display`), Badge Status (`.status-pill`, `.photo-count-badge`, `.preview-dimensions-pill`).
+  * Dimuat secara lokal via `@font-face` dari `/assets/fonts/coolvetica.woff`.
+* **Font Deskripsi & Elemen UI**: `'Poppins', system-ui, sans-serif` (Poppins Regular 400 hingga Bold 700/800)
+  * Digunakan untuk: Paragraf deskripsi (`p`), instruksi langkah gestur, teks bantuan/hint (`.settings-hint`, `.preview-hint`), tombol interaktif (`.btn`, `.btn-interactive`, `.landing-cta-btn`, `.btn-pay`), label form dan input kontrol, tabel galeri cetak, kartu diagnostik, serta pesan notifikasi toast.
+  * Dimuat dari Google Fonts CDN (`weights: 300, 400, 500, 600, 700, 800, 900`).
+
+* **Skala Tipografi**:
+  * Display / Hero Title: `clamp(36px, 5vw, 56px)` — Coolvetica Regular
+  * Heading 1 (Title): `clamp(26px, 3.2vw, 36px)` — Coolvetica Regular
+  * Heading 2 (Screen Subhead): `clamp(20px, 2.4vw, 26px)` — Coolvetica Regular
+  * Body Large / CTA Button: `clamp(16px, 1.9vw, 20px)` — Poppins Bold (700/800)
+  * Body Regular: `clamp(14px, 1.6vw, 16px)` — Poppins Regular (400)
+  * Caption / Label: `clamp(12px, 1.4vw, 14px)` — Poppins Medium (500) / Semi-Bold (600)
+  * Micro / Hint / Badge: `clamp(10px, 1.2vw, 12px)` — Poppins Semi-Bold (600/700) (Monospace untuk Order ID / File path)
 
 ### 2.3 Bentuk & Bayangan (*Border Radius & Shadows*)
 * Radius Tombol: `--r-lg: 16px` | `--r-xl: 24px` | Pill: `--r-full: 9999px`
