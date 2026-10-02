@@ -3798,6 +3798,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   --text-xl: clamp(20px, 2.4vw, 26px);
   --text-2xl: clamp(26px, 3.2vw, 36px);
   --text-3xl: clamp(36px, 5vw, 56px);
+  --text-hero: clamp(56px, 7.5vw, 96px);
 
   --r-sm: 8px; --r-md: 16px; --r-lg: 24px; --r-xl: 32px; --r-full: 999px;
   --tr-fast: 150ms ease;
@@ -3950,9 +3951,9 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 #screen-landing {
   background: var(--col-bg);
   background-image: var(--grad-hero);
-  padding: 48px;
+  padding: clamp(24px, 4vh, 48px) 32px;
   text-align: center;
-  gap: 32px;
+  gap: clamp(16px, 2.8vh, 30px);
 }
 
 .brand-badge {
@@ -3967,23 +3968,25 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 }
 
 .landing-title {
-  font-family: var(--font-head);
-  font-size: var(--text-3xl);
-  font-weight: normal;
-  line-height: 1.1;
+  font-family: var(--font-head) !important;
+  font-size: clamp(56px, 7.5vw, 96px) !important;
+  font-weight: normal !important;
+  line-height: 1.05;
   background: var(--grad-blue);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   letter-spacing: 0.5px;
+  margin: 0;
 }
 
 .landing-sub {
   font-family: var(--font-head);
-  font-size: var(--text-lg);
+  font-size: clamp(16px, 1.8vw, 22px);
   font-weight: normal;
   color: var(--col-text-2);
-  max-width: 580px;
+  max-width: 640px;
   letter-spacing: 0.3px;
+  line-height: 1.4;
 }
 
 .landing-cta-btn {

@@ -54,7 +54,7 @@ Sistem tipografi aplikasi mengombinasikan font display modern untuk judul dan fo
   * Dimuat dari Google Fonts CDN (`weights: 300, 400, 500, 600, 700, 800, 900`).
 
 * **Skala Tipografi**:
-  * Display / Hero Title: `clamp(36px, 5vw, 56px)` — Coolvetica Regular
+  * Display / Hero Title (`.landing-title`): `clamp(56px, 7.5vw, 96px)` — Coolvetica Regular (Grand Kiosk Scale)
   * Heading 1 (Title): `clamp(26px, 3.2vw, 36px)` — Coolvetica Regular
   * Heading 2 (Screen Subhead): `clamp(20px, 2.4vw, 26px)` — Coolvetica Regular
   * Body Large / CTA Button: `clamp(16px, 1.9vw, 20px)` — Poppins Bold (700/800)
