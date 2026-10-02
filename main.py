@@ -3177,18 +3177,6 @@ def api_final_photo():
         return resp
     abort(404)
 
-@app.route("/api/landing_sample_strip")
-def api_landing_sample_strip():
-    strip_path = ASSETS_DIR / "landing_sample_strip.jpg"
-    if not strip_path.exists():
-        fallback_frame = FRAMES_DIR / "FramePhotoBooth1.png"
-        if fallback_frame.exists():
-            return send_file(str(fallback_frame), mimetype="image/png")
-        return jsonify({"ok": False, "error": "Sample strip not found"}), 404
-    resp = send_file(str(strip_path), mimetype="image/jpeg")
-    resp.headers["Cache-Control"] = "public, max-age=3600"
-    return resp
-
 @app.route("/api/saved_photos")
 def api_saved_photos():
     """Returns list of all saved photos and print sheets from PHOTOS_DIR."""
@@ -3373,6 +3361,25 @@ def api_frame_thumb(filename: str):
         return Response(data, mimetype="image/png")
     except Exception:
         abort(404)
+
+@app.route("/api/landing_strip")
+def api_landing_strip():
+    """Serves the preview strip for the landing page mockup with FramePhotoBooth1."""
+    sample_path = ASSETS_DIR / "landing_sample_strip.jpg"
+    if sample_path.exists():
+        try:
+            with open(sample_path, "rb") as f:
+                return Response(f.read(), mimetype="image/jpeg")
+        except Exception:
+            pass
+    frame1_path = FRAMES_DIR / "FramePhotoBooth1.png"
+    if frame1_path.exists():
+        try:
+            with open(frame1_path, "rb") as f:
+                return Response(f.read(), mimetype="image/png")
+        except Exception:
+            pass
+    abort(404)
 
 @app.route("/payment/webhook", methods=["POST"])
 def payment_webhook():
@@ -3794,6 +3801,8 @@ body.gesture-control .screen,
 body.gesture-control .btn,
 body.gesture-control .btn-interactive,
 body.gesture-control .landing-cta-btn,
+body.gesture-control .landing-btn-primary,
+body.gesture-control .landing-btn-dwell,
 body.gesture-control .frame-card {
   cursor: none !important;
 }
@@ -3807,18 +3816,20 @@ body.gesture-control .frame-card {
 /* Prevent native mouse hover scaling when in gesture mode; only virtual cursor hover triggers */
 body.gesture-control .btn:hover:not(.hovered),
 body.gesture-control .landing-cta-btn:hover:not(.hovered),
+body.gesture-control .landing-btn-primary:hover:not(.hovered),
+body.gesture-control .landing-btn-dwell:hover:not(.hovered),
 body.gesture-control .frame-card:hover:not(.hovered) {
   transform: none !important;
   box-shadow: inherit !important;
 }
 
 /* Virtual cursor hover effect */
-.btn.hovered, .landing-cta-btn.hovered, .frame-card.hovered {
-  transform: scale(1.05) !important;
-  box-shadow: 0 0 24px rgba(88, 78, 184, 0.45) !important;
+.btn.hovered, .landing-cta-btn.hovered, .landing-btn-primary.hovered, .landing-btn-dwell.hovered, .frame-card.hovered {
+  transform: scale(1.04) !important;
+  box-shadow: 0 0 28px rgba(88, 78, 184, 0.6) !important;
 }
 
-.btn.gesture-clicked, .landing-cta-btn.gesture-clicked, .frame-card.gesture-clicked {
+.btn.gesture-clicked, .landing-cta-btn.gesture-clicked, .landing-btn-primary.gesture-clicked, .landing-btn-dwell.gesture-clicked, .frame-card.gesture-clicked {
   transform: scale(0.96) !important;
   filter: brightness(1.25);
 }
@@ -3845,536 +3856,564 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   z-index: 20;
 }
 
-/* LANDING SCREEN (EXPO FIKSI 2-COLUMN HERO LAYOUT) */
+/* ============================================================
+   NEW LANDING SCREEN (STUDIO DARK THEME - MATCHING REFERENCE LAYOUT)
+   ============================================================ */
 #screen-landing {
   background: var(--col-bg);
-  background-image: radial-gradient(circle at 12% 18%, rgba(88,78,184,0.08) 0%, transparent 45%),
-                    radial-gradient(circle at 88% 80%, rgba(253,192,15,0.06) 0%, transparent 45%);
-  padding: clamp(20px, 2.8vh, 32px) clamp(24px, 3.6vw, 48px);
+  background-image:
+    radial-gradient(ellipse 65% 55% at 20% 45%, rgba(88, 78, 184, 0.18) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 50% at 85% 30%, rgba(99, 102, 241, 0.12) 0%, transparent 65%),
+    radial-gradient(circle at 98% 50%, rgba(255, 255, 255, 0.05) 1.5px, transparent 1.5px);
+  background-size: 100% 100%, 100% 100%, 28px 28px;
+  padding: 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  align-items: stretch;
-  text-align: left;
-  gap: 0;
+  height: 100vh;
+  width: 100vw;
   overflow: hidden;
   box-sizing: border-box;
 }
 
-/* TOP HEADER BAR */
+/* TOP STATUS BAR */
 .landing-top-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 22px 48px 10px 48px;
   width: 100%;
+  box-sizing: border-box;
   z-index: 10;
 }
 
-.camera-status-pill {
-  display: inline-flex;
+.landing-cam-pill {
+  display: flex;
   align-items: center;
   gap: 12px;
   padding: 6px 18px 6px 8px;
-  background: var(--col-surface);
-  border: 1px solid var(--col-border);
+  background: rgba(23, 26, 38, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--r-full);
-  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
 }
 
-.cam-pill-thumb {
-  width: 36px;
-  height: 36px;
+.landing-cam-avatar {
+  width: 38px;
+  height: 38px;
   border-radius: 50%;
-  background: var(--col-surface-2);
-  border: 2px solid var(--col-border);
+  background: linear-gradient(135deg, #2E3650, #171A26);
+  border: 1px solid rgba(255, 255, 255, 0.14);
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  color: #A5B4FC;
 }
 
-.cam-pill-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.cam-pill-info {
+.landing-cam-info {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  text-align: left;
 }
 
-.cam-pill-title {
+.landing-cam-status-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--col-text);
+  gap: 8px;
 }
 
-.cam-pill-dot {
+.landing-status-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--col-success);
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+  background: #10B981;
+  box-shadow: 0 0 10px #10B981;
 }
 
-.cam-pill-sub {
+.landing-status-dot.pulse {
+  animation: landingDotPulse 2s infinite ease-in-out;
+}
+
+@keyframes landingDotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.85); }
+}
+
+.landing-cam-status-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--col-text-1);
+}
+
+.landing-cam-detail {
   font-size: 11px;
-  font-weight: 500;
   color: var(--col-text-3);
-  letter-spacing: 0.2px;
+  font-weight: 500;
 }
 
-.top-capabilities-row {
+.landing-specs-row {
   display: flex;
   align-items: center;
   gap: 12px;
 }
 
-.cap-badge {
-  display: inline-flex;
+.landing-spec-pill {
+  display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 16px;
-  background: var(--col-surface);
-  border: 1px solid var(--col-border);
+  padding: 8px 18px;
+  background: rgba(23, 26, 38, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--r-full);
   font-size: 12px;
   font-weight: 600;
-  color: var(--col-text);
-  box-shadow: var(--shadow-sm);
-  white-space: nowrap;
+  color: var(--col-text-2);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
-.cap-badge-dot {
-  width: 8px;
-  height: 8px;
+.landing-spec-dot.green {
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--col-success);
+  background: #10B981;
+  box-shadow: 0 0 8px #10B981;
 }
 
-.cap-badge-icon {
-  font-size: 14px;
+.landing-spec-icon.gold {
+  color: #FDC00F;
 }
 
-/* 2-COLUMN HERO GRID */
+/* HERO GRID */
 .landing-hero-grid {
   display: grid;
-  grid-template-columns: 1.18fr 0.82fr;
-  gap: clamp(24px, 3.2vw, 48px);
+  grid-template-columns: 1.15fr 0.85fr;
   align-items: center;
+  gap: 40px;
   width: 100%;
-  max-width: 1440px;
+  max-width: 1420px;
   margin: 0 auto;
+  padding: 6px 48px;
+  box-sizing: border-box;
   flex: 1;
-  padding: clamp(8px, 1.5vh, 18px) 0;
 }
 
-/* LEFT COLUMN */
-.landing-content-col {
+.landing-hero-left {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: clamp(14px, 2vh, 22px);
-  max-width: 640px;
+  text-align: left;
+  gap: 18px;
 }
 
 .landing-edition-badge {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 14px;
-  background: rgba(88, 78, 184, 0.08);
-  border: 1px solid rgba(88, 78, 184, 0.25);
+  padding: 6px 16px;
+  background: rgba(88, 78, 184, 0.16);
+  border: 1px solid rgba(99, 102, 241, 0.35);
   border-radius: var(--r-full);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
-  color: var(--col-blue-1);
-  letter-spacing: 1.5px;
+  letter-spacing: 1px;
+  color: #C7D2FE;
   text-transform: uppercase;
 }
 
-.landing-hero-title {
-  font-size: clamp(34px, 4vw, 56px);
-  font-weight: 900;
-  line-height: 1.12;
-  letter-spacing: -0.02em;
-  color: var(--col-text);
-  margin: 0;
+.badge-sparkle {
+  color: #818CF8;
 }
 
-.title-gradient-word {
-  position: relative;
-  display: inline-block;
-  background: var(--grad-blue);
+.landing-headline {
+  font-size: clamp(38px, 4.4vw, 56px);
+  font-weight: 900;
+  line-height: 1.1;
+  color: #FFFFFF;
+  margin: 0;
+  letter-spacing: -1px;
+}
+
+.landing-headline-gradient {
+  background: linear-gradient(135deg, #6366F1 0%, #A855F7 50%, #EC4899 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  padding-bottom: 6px;
+  display: inline-block;
 }
 
-.title-brush-underline {
-  position: absolute;
-  left: 0;
-  bottom: -2px;
-  width: 100%;
-  height: 14px;
-  pointer-events: none;
-}
-
-.landing-hero-sub {
-  font-size: clamp(14px, 1.4vw, 16px);
-  line-height: 1.55;
+.landing-subtext {
+  font-size: 15px;
   color: var(--col-text-2);
+  line-height: 1.6;
+  max-width: 520px;
   margin: 0;
-  max-width: 540px;
 }
 
-/* ACTION ROW */
-.landing-action-row {
+/* CTA BUTTON ROW */
+.landing-cta-row {
   display: flex;
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
-  width: 100%;
 }
 
-.landing-primary-btn, .landing-cta-btn {
-  display: inline-flex;
+.landing-btn-primary {
+  display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 14px 34px 14px 18px;
-  background: var(--grad-blue);
-  color: #FFFFFF;
+  gap: 14px;
+  padding: 12px 28px 12px 14px;
+  background: linear-gradient(135deg, #584EB8 0%, #4338CA 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: var(--r-full);
-  border: none;
-  box-shadow: 0 12px 28px -6px rgba(88, 78, 184, 0.45);
+  color: #FFFFFF;
+  box-shadow: 0 8px 28px rgba(88, 78, 184, 0.45);
   cursor: pointer;
-  transition: transform var(--tr-fast), box-shadow var(--tr-fast);
-  text-align: left;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
-.landing-primary-btn:hover, .landing-primary-btn.hovered,
-.landing-cta-btn:hover, .landing-cta-btn.hovered {
-  transform: translateY(-2px) scale(1.03);
-  box-shadow: 0 16px 36px -4px rgba(88, 78, 184, 0.6);
+.landing-btn-primary:hover, .landing-btn-primary.hovered {
+  transform: scale(1.03);
+  box-shadow: 0 12px 36px rgba(88, 78, 184, 0.65), 0 0 20px rgba(99, 102, 241, 0.4);
 }
 
-.landing-primary-btn:active, .landing-cta-btn:active {
-  transform: translateY(1px) scale(0.98);
-}
-
-.btn-icon-circle {
-  width: 42px;
-  height: 42px;
+.landing-btn-star-badge {
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  background: var(--grad-yellow);
-  color: #111318;
+  background: rgba(253, 192, 15, 0.2);
+  border: 1.5px solid #FDC00F;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
-  box-shadow: 0 4px 10px rgba(253, 192, 15, 0.4);
-  flex-shrink: 0;
+  font-size: 18px;
+  box-shadow: 0 0 12px rgba(253, 192, 15, 0.35);
 }
 
-.btn-text-group {
+.landing-btn-text-group {
   display: flex;
   flex-direction: column;
+  text-align: left;
 }
 
-.btn-main-label {
-  font-size: 17px;
+.landing-btn-main-label {
+  font-size: 16px;
   font-weight: 800;
-  letter-spacing: -0.01em;
-  color: #FFFFFF;
+  letter-spacing: -0.2px;
 }
 
-.btn-sub-label {
+.landing-btn-sub-label {
   font-size: 11px;
-  font-weight: 500;
-  color: rgba(255, 255, 255, 0.82);
+  font-weight: 600;
+  color: #FDC00F;
 }
 
-.btn-arrow-right {
-  font-size: 22px;
-  font-weight: 700;
-  color: #FFFFFF;
+.landing-btn-arrow {
+  font-size: 20px;
+  font-weight: 800;
   margin-left: 6px;
-  transition: transform var(--tr-fast);
+  transition: transform 0.2s ease;
 }
 
-.landing-primary-btn:hover .btn-arrow-right, .landing-primary-btn.hovered .btn-arrow-right,
-.landing-cta-btn:hover .btn-arrow-right, .landing-cta-btn.hovered .btn-arrow-right {
+.landing-btn-primary:hover .landing-btn-arrow,
+.landing-btn-primary.hovered .landing-btn-arrow {
   transform: translateX(4px);
 }
 
-.landing-dwell-card {
-  display: inline-flex;
+.landing-btn-dwell {
+  display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 20px;
-  background: var(--col-surface);
-  border: 1px solid var(--col-border);
+  padding: 12px 22px;
+  background: rgba(23, 26, 38, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: var(--r-full);
-  box-shadow: var(--shadow-sm);
+  color: var(--col-text-1);
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
 
-.dwell-icon {
-  font-size: 20px;
+.landing-btn-dwell:hover, .landing-btn-dwell.hovered {
+  background: rgba(33, 38, 56, 0.85);
+  border-color: rgba(99, 102, 241, 0.4);
+  transform: scale(1.02);
 }
 
-.dwell-info {
+.landing-dwell-icon-box {
+  color: #A5B4FC;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.landing-dwell-text-group {
   display: flex;
   flex-direction: column;
+  text-align: left;
 }
 
-.dwell-title {
+.landing-dwell-title {
   font-size: 13px;
   font-weight: 700;
-  color: var(--col-text);
 }
 
-.dwell-sub {
+.landing-dwell-sub {
   font-size: 11px;
-  font-weight: 500;
   color: var(--col-text-3);
+  font-weight: 500;
 }
 
-/* TOUCHLESS AI GESTURE CARD */
-.landing-gesture-card {
-  background: var(--col-surface);
-  border: 1px solid var(--col-border);
-  border-radius: 20px;
-  padding: clamp(14px, 1.8vh, 18px) clamp(16px, 2vw, 22px);
-  box-shadow: var(--shadow-sm);
+/* TOUCHLESS AI GESTURE CARD BOX */
+.landing-gesture-card-box {
   width: 100%;
-  max-width: 560px;
+  max-width: 540px;
+  background: rgba(23, 26, 38, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 22px;
+  padding: 18px 22px;
+  backdrop-filter: blur(16px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-sizing: border-box;
 }
 
-.gesture-card-header {
+.landing-gesture-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
-.gesture-header-title {
+.landing-gest-tag {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 11px;
   font-weight: 800;
-  letter-spacing: 1.5px;
-  text-transform: uppercase;
-  color: var(--col-blue-1);
+  letter-spacing: 1.2px;
+  color: #A5B4FC;
 }
 
-.gesture-header-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--col-blue-1);
+.landing-tag-dot {
+  color: #6366F1;
+  font-size: 10px;
 }
 
-.gesture-header-sub {
+.landing-gest-subtag {
   font-size: 11px;
-  font-weight: 600;
   color: var(--col-text-3);
+  font-weight: 500;
 }
 
-.gesture-card-grid {
+.landing-gesture-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: 12px;
 }
 
-.gesture-subcard {
-  background: var(--col-surface-2);
-  border: 1px solid var(--col-border);
-  border-radius: 14px;
+.landing-gest-card {
+  background: rgba(33, 38, 56, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
   padding: 12px 8px;
   text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  transition: transform var(--tr-fast), background var(--tr-fast);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  box-sizing: border-box;
 }
 
-.gesture-subcard:hover {
-  background: rgba(88, 78, 184, 0.05);
-  transform: translateY(-2px);
+.landing-gest-card.active {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: #818CF8;
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.45);
+  transform: translateY(-3px);
 }
 
-.gesture-subcard-icon {
-  font-size: 24px;
-  margin-bottom: 2px;
+.gest-card-icon {
+  font-size: 26px;
+  margin-bottom: 6px;
 }
 
-.gesture-subcard-title {
-  font-size: 12.5px;
+.gest-card-name {
+  font-size: 13px;
   font-weight: 700;
-  color: var(--col-text);
+  color: var(--col-text-1);
 }
 
-.gesture-subcard-desc {
+.gest-card-desc {
   font-size: 11px;
-  font-weight: 500;
   color: var(--col-text-3);
+  margin-top: 2px;
 }
 
-/* RIGHT COLUMN: TILTED PHOTO STRIP MOCKUP */
-.landing-mockup-col {
+.landing-gest-card.active .gest-card-name {
+  color: #FFFFFF;
+}
+
+.landing-gest-card.active .gest-card-desc {
+  color: #C7D2FE;
+}
+
+/* RIGHT HERO COLUMN: 3D STRIP MOCKUP */
+.landing-hero-right {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  width: 100%;
+}
+
+.landing-mockup-container {
   position: relative;
   display: flex;
-  align-items: center;
   justify-content: center;
-  height: 100%;
+  align-items: center;
+  perspective: 1000px;
 }
 
-.strip-mockup-container {
+.landing-ambient-glow {
+  position: absolute;
+  width: 320px;
+  height: 480px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(99, 102, 241, 0.22) 0%, rgba(236, 72, 153, 0.08) 50%, transparent 75%);
+  filter: blur(40px);
+  z-index: 1;
+  pointer-events: none;
+}
+
+.landing-strip-card {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.strip-mockup-card {
-  transform: rotate(5deg) scale(0.96);
-  background: #FFFFFF;
+  z-index: 2;
+  width: 240px;
+  max-height: 520px;
+  aspect-ratio: 1623 / 3557;
   border-radius: 20px;
-  padding: 10px;
-  box-shadow: 0 25px 50px -12px rgba(17, 19, 24, 0.22),
-              0 0 0 1px rgba(88, 78, 184, 0.08);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  overflow: hidden;
+  box-shadow:
+    0 24px 60px -10px rgba(0, 0, 0, 0.85),
+    0 0 35px rgba(99, 102, 241, 0.2),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+  background: #111318;
+  transform: rotate(2.5deg) translateY(-2px);
   transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.4s ease;
   cursor: pointer;
 }
 
-.strip-mockup-card:hover {
-  transform: rotate(2deg) scale(1);
-  box-shadow: 0 32px 64px -12px rgba(88, 78, 184, 0.3),
-              0 0 0 1px rgba(88, 78, 184, 0.15);
+.landing-strip-card:hover {
+  transform: rotate(0deg) scale(1.02);
+  box-shadow:
+    0 32px 75px -10px rgba(0, 0, 0, 0.95),
+    0 0 50px rgba(99, 102, 241, 0.35),
+    inset 0 0 0 1.5px rgba(255, 255, 255, 0.25);
 }
 
-.landing-strip-img {
-  width: auto;
-  height: clamp(340px, 48vh, 520px);
-  border-radius: 12px;
-  object-fit: contain;
+.landing-strip-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
   display: block;
 }
 
-/* FLOATING PILLS ON MOCKUP */
-.float-pill-top {
+.strip-card-sheen {
   position: absolute;
-  top: -6px;
-  right: -20px;
-  background: var(--col-surface);
-  border: 1px solid var(--col-border);
-  border-radius: var(--r-full);
-  padding: 8px 18px;
-  box-shadow: 0 14px 28px -6px rgba(17, 19, 24, 0.14);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  z-index: 10;
-  animation: float-soft 3.6s ease-in-out infinite alternate;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, transparent 45%, rgba(0, 0, 0, 0.2) 100%);
+  pointer-events: none;
 }
 
-.float-pill-cursor-dot {
-  width: 28px;
-  height: 28px;
+/* FLOATING CHIPS */
+.landing-floating-chip {
+  position: absolute;
+  z-index: 4;
+  background: rgba(23, 26, 38, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(14px);
+  animation: floatChip 4s infinite ease-in-out;
+}
+
+@keyframes floatChip {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+
+.landing-floating-chip.chip-top {
+  top: -8px;
+  right: -24px;
+}
+
+.chip-avatar-purple {
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
-  background: rgba(88, 78, 184, 0.12);
-  border: 2px solid var(--col-blue-1);
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid rgba(99, 102, 241, 0.4);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.float-pill-cursor-inner {
-  width: 8px;
-  height: 8px;
+.chip-purple-dot {
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
-  background: var(--col-blue-1);
+  background: #818CF8;
+  box-shadow: 0 0 10px #818CF8;
 }
 
-.float-pill-text {
+.landing-floating-chip.chip-bottom {
+  bottom: 8px;
+  left: -28px;
+  animation-delay: -2s;
+}
+
+.chip-icon-box {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: rgba(253, 192, 15, 0.15);
+  border: 1px solid rgba(253, 192, 15, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+
+.chip-text-group {
   display: flex;
   flex-direction: column;
+  text-align: left;
 }
 
-.float-pill-title {
+.chip-title {
   font-size: 13px;
   font-weight: 700;
-  color: var(--col-text);
+  color: #FFFFFF;
 }
 
-.float-pill-desc {
-  font-size: 10.5px;
-  font-weight: 500;
-  color: var(--col-text-3);
-}
-
-.float-pill-bottom {
-  position: absolute;
-  bottom: 18px;
-  left: -26px;
-  background: var(--col-surface);
-  border: 1px solid var(--col-border);
-  border-radius: 20px;
-  padding: 12px 20px;
-  box-shadow: 0 16px 32px -6px rgba(17, 19, 24, 0.18);
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  z-index: 10;
-  animation: float-soft 4.2s ease-in-out infinite alternate-reverse;
-}
-
-.float-pill-printer-icon {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  background: rgba(253, 192, 15, 0.15);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  color: var(--col-yellow-dark);
-}
-
-.float-pill-count {
-  font-size: 20px;
-  font-weight: 900;
-  letter-spacing: -0.02em;
-  color: var(--col-text);
-  line-height: 1.1;
-}
-
-.float-pill-count-sub {
+.chip-subtitle {
   font-size: 11px;
-  font-weight: 500;
   color: var(--col-text-3);
+  font-weight: 500;
 }
 
-.float-pill-qr-icon {
-  font-size: 20px;
-  color: var(--col-blue-1);
-  margin-left: 8px;
-  opacity: 0.8;
+.chip-stat-num {
+  font-size: 17px;
+  font-weight: 800;
+  color: #FFFFFF;
+  line-height: 1.1;
+  letter-spacing: -0.3px;
 }
 
-@keyframes float-soft {
-  0% { transform: translateY(0px); }
-  100% { transform: translateY(-8px); }
+.chip-sparkle-icon {
+  color: #818CF8;
+  font-size: 14px;
+  margin-left: 4px;
 }
 
 /* BOTTOM FOOTER BAR */
@@ -4382,75 +4421,63 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding: 14px 48px;
   width: 100%;
-  padding-top: 12px;
-  border-top: 1px solid var(--col-border);
+  box-sizing: border-box;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(13, 15, 23, 0.7);
+  backdrop-filter: blur(8px);
   z-index: 10;
 }
 
-.footer-prompt-left {
+.landing-footer-left, .landing-footer-right {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--col-text);
-}
-
-.footer-prompt-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--col-blue-1);
-}
-
-.footer-prompt-sub {
-  color: var(--col-text-3);
-  font-weight: 500;
-}
-
-.footer-status-right {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-}
-
-.footer-key-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
   font-size: 12px;
-  font-weight: 600;
-  color: var(--col-text-2);
 }
 
-.kbd-tag {
+.landing-footer-dot.purple {
+  color: #818CF8;
+  font-size: 12px;
+}
+
+.landing-footer-dot.green {
+  color: #10B981;
+  font-size: 12px;
+}
+
+.landing-footer-txt {
+  color: var(--col-text-2);
+  font-weight: 600;
+}
+
+.landing-footer-sep {
+  color: var(--col-text-3);
+}
+
+.landing-footer-sub {
+  color: var(--col-text-3);
+}
+
+.landing-kbd {
   display: inline-block;
-  padding: 3px 8px;
-  background: var(--col-surface-2);
-  border: 1px solid var(--col-border);
-  border-radius: 6px;
-  font-family: monospace;
+  padding: 2px 7px;
   font-size: 11px;
   font-weight: 700;
-  color: var(--col-text);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  color: var(--col-text-1);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
 }
 
-.footer-paper-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--col-text-2);
-}
-
-.footer-paper-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--col-success);
+@media (max-height: 720px) {
+  .landing-hero-grid { padding: 4px 32px; gap: 20px; }
+  .landing-headline { font-size: 36px; }
+  .landing-strip-card { max-height: 380px; width: 180px; }
+  .landing-subtext { font-size: 13px; line-height: 1.4; }
+  .landing-gesture-card-box { padding: 12px 16px; }
 }
 
 /* CAMERA SCREEN */
@@ -6377,162 +6404,167 @@ body.dark-mode .gallery-zoom-card {
 <div id="app">
 
   <!-- LANDING -->
-  <div class="screen active" id="screen-landing" onclick="handleLandingScreenClick(event)">
-    <!-- TOP BAR -->
-    <div class="landing-top-bar">
-      <div class="camera-status-pill">
-        <div class="cam-pill-thumb">
-          <img id="landing-cam-thumb" src="/video_feed" alt="Camera Feed" onerror="this.style.display='none';">
+  <div class="screen active" id="screen-landing">
+    <!-- TOP STATUS BAR -->
+    <header class="landing-top-bar">
+      <div class="landing-cam-pill">
+        <div class="landing-cam-avatar">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+            <circle cx="12" cy="13" r="4"></circle>
+          </svg>
         </div>
-        <div class="cam-pill-info">
-          <div class="cam-pill-title">
-            <span class="cam-pill-dot"></span>
-            <span id="landing-cam-status-text">Live Camera: Calibrated</span>
+        <div class="landing-cam-info">
+          <div class="landing-cam-status-row">
+            <span class="landing-status-dot pulse" id="landing-cam-dot"></span>
+            <span class="landing-cam-status-title" id="landing-cam-title">Live Camera: Calibrated</span>
           </div>
-          <span class="cam-pill-sub" id="landing-cam-name-text">Sony α7 IV • 4K 60fps Ultra-Sense</span>
+          <div class="landing-cam-detail" id="landing-cam-detail">Optical Sensor • 60fps Ultra-Sense</div>
         </div>
       </div>
 
-      <div class="top-capabilities-row">
-        <div class="cap-badge">
-          <span class="cap-badge-dot"></span>
+      <div class="landing-specs-row">
+        <div class="landing-spec-pill">
+          <span class="landing-spec-dot green"></span>
           <span>4K Optical Ready</span>
         </div>
-        <div class="cap-badge">
-          <span class="cap-badge-icon">✋</span>
+        <div class="landing-spec-pill">
+          <span class="landing-spec-icon">✋</span>
           <span>AI Gesture Active</span>
         </div>
-        <div class="cap-badge">
-          <span class="cap-badge-icon" style="color: var(--col-yellow-dark);">⚡</span>
+        <div class="landing-spec-pill">
+          <span class="landing-spec-icon gold">✨</span>
           <span>Instant 300DPI Dye-Sub</span>
         </div>
       </div>
-    </div>
+    </header>
 
-    <!-- 2-COLUMN HERO GRID -->
-    <div class="landing-hero-grid">
-      <!-- LEFT CONTENT COLUMN -->
-      <div class="landing-content-col">
+    <!-- MAIN HERO GRID -->
+    <main class="landing-hero-grid">
+      <!-- LEFT COLUMN -->
+      <div class="landing-hero-left">
         <div class="landing-edition-badge">
-          <span>✦</span>
+          <span class="badge-sparkle">✦</span>
           <span>FIKSI 2026 SPECIAL EDITION • STUDIO KIOSK</span>
         </div>
 
-        <h1 class="landing-hero-title">
+        <h1 class="landing-headline">
           Capture Your<br>
-          <span class="title-gradient-word">
-            Best Moment
-            <svg class="title-brush-underline" viewBox="0 0 240 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M4 13C65 4 175 4 236 12" stroke="#FDC00F" stroke-width="6" stroke-linecap="round"/>
-            </svg>
-          </span>
+          <span class="landing-headline-gradient">Best Moment</span>
         </h1>
 
-        <p class="landing-hero-sub">
+        <p class="landing-subtext">
           Take photos, choose custom creator frames, and print instantly in ultra-fine exhibition quality. Fully touch-free or tap-ready.
         </p>
 
-        <!-- ACTION ROW: PRIMARY CTA + AUTO DWELL -->
-        <div class="landing-action-row">
-          <button class="landing-primary-btn landing-cta-btn btn-interactive" onclick="doAction('start_camera')" title="Mulai Sesi Foto">
-            <div class="btn-icon-circle">⭐</div>
-            <div class="btn-text-group">
-              <span class="btn-main-label">Start Photo Session</span>
-              <span class="btn-sub-label">Mulai Sesi Foto Eksklusif</span>
+        <div class="landing-cta-row">
+          <button class="landing-btn-primary btn-interactive" id="landing-btn-start" onclick="doAction('start_camera')">
+            <div class="landing-btn-star-badge">⭐</div>
+            <div class="landing-btn-text-group">
+              <span class="landing-btn-main-label">Start Photo Session</span>
+              <span class="landing-btn-sub-label">Mulai Sesi Foto (Disini!)</span>
             </div>
-            <span class="btn-arrow-right">→</span>
+            <span class="landing-btn-arrow">→</span>
           </button>
 
-          <div class="landing-dwell-card">
-            <span class="dwell-icon">🤏</span>
-            <div class="dwell-info">
-              <span class="dwell-title">Auto Hover Dwell</span>
-              <span class="dwell-sub">Hold cursor to trigger</span>
+          <button class="landing-btn-dwell btn-interactive" id="landing-btn-dwell" onclick="doAction('start_camera')">
+            <div class="landing-dwell-icon-box">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10" stroke-dasharray="4 2"></circle>
+                <path d="M12 6v6l4 2"></path>
+              </svg>
             </div>
-          </div>
+            <div class="landing-dwell-text-group">
+              <span class="landing-dwell-title">Auto Hover Dwell</span>
+              <span class="landing-dwell-sub">Hold cursor to trigger</span>
+            </div>
+          </button>
         </div>
 
-        <!-- TOUCHLESS AI GESTURE CONTROL CARD -->
-        <div class="landing-gesture-card">
-          <div class="gesture-card-header">
-            <div class="gesture-header-title">
-              <span class="gesture-header-dot"></span>
+        <!-- TOUCHLESS GESTURE CARD BOX -->
+        <div class="landing-gesture-card-box">
+          <div class="landing-gesture-header">
+            <div class="landing-gest-tag">
+              <span class="landing-tag-dot">●</span>
               <span>TOUCHLESS AI GESTURE CONTROL</span>
             </div>
-            <span class="gesture-header-sub">Zero-contact interaction</span>
+            <span class="landing-gest-subtag">Zero-contact interaction</span>
           </div>
 
-          <div class="gesture-card-grid">
-            <div class="gesture-subcard">
-              <span class="gesture-subcard-icon">✋</span>
-              <span class="gesture-subcard-title">Open Palm</span>
-              <span class="gesture-subcard-desc">Move Cursor</span>
+          <div class="landing-gesture-grid">
+            <div class="landing-gest-card" id="landing-card-palm">
+              <div class="gest-card-icon">✋</div>
+              <div class="gest-card-name">Open Palm</div>
+              <div class="gest-card-desc">Move Cursor</div>
             </div>
-            <div class="gesture-subcard">
-              <span class="gesture-subcard-icon">✊</span>
-              <span class="gesture-subcard-title">Fist Hold</span>
-              <span class="gesture-subcard-desc">Hold to Select</span>
+
+            <div class="landing-gest-card" id="landing-card-fist">
+              <div class="gest-card-icon">✊</div>
+              <div class="gest-card-name">Fist Hold</div>
+              <div class="gest-card-desc">Hold to Select</div>
             </div>
-            <div class="gesture-subcard">
-              <span class="gesture-subcard-icon">✌️</span>
-              <span class="gesture-subcard-title">Peace Sign</span>
-              <span class="gesture-subcard-desc">Instant Snap</span>
+
+            <div class="landing-gest-card" id="landing-card-peace">
+              <div class="gest-card-icon">✌️</div>
+              <div class="gest-card-name">Peace Sign</div>
+              <div class="gest-card-desc">Instant Snap</div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- RIGHT COLUMN: TILTED PHOTO STRIP MOCKUP -->
-      <div class="landing-mockup-col">
-        <div class="strip-mockup-container">
-          <!-- Top Floating Pill -->
-          <div class="float-pill-top">
-            <div class="float-pill-cursor-dot">
-              <div class="float-pill-cursor-inner"></div>
+      <!-- RIGHT COLUMN: 3D PHOTO STRIP MOCKUP -->
+      <div class="landing-hero-right">
+        <div class="landing-mockup-container">
+          <div class="landing-ambient-glow"></div>
+
+          <!-- Top Floating Chip -->
+          <div class="landing-floating-chip chip-top">
+            <div class="chip-avatar-purple">
+              <span class="chip-purple-dot pulse"></span>
             </div>
-            <div class="float-pill-text">
-              <span class="float-pill-title">Virtual AI Cursor</span>
-              <span class="float-pill-desc">Position tracking active</span>
+            <div class="chip-text-group">
+              <div class="chip-title">Virtual AI Cursor</div>
+              <div class="chip-subtitle">Hold cursor to register</div>
             </div>
           </div>
 
-          <!-- Photobooth Strip Card (FramePhotoBooth1) -->
-          <div class="strip-mockup-card btn-interactive" onclick="doAction('start_camera')" title="Klik untuk mulai sesi">
-            <img class="landing-strip-img" src="/api/landing_sample_strip" alt="FIKSI Frame Photo Strip">
+          <!-- 3D Photo Strip Card with FramePhotoBooth1.png -->
+          <div class="landing-strip-card" onclick="doAction('start_camera')">
+            <img src="/api/landing_strip" alt="Photobooth Frame Strip" class="landing-strip-image" onerror="this.onerror=null; this.src='/api/frame_thumb/FramePhotoBooth1.png';">
+            <div class="strip-card-sheen"></div>
           </div>
 
-          <!-- Bottom Floating Pill -->
-          <div class="float-pill-bottom">
-            <div class="float-pill-printer-icon">🖨️</div>
-            <div>
-              <div class="float-pill-count">1,482</div>
-              <div class="float-pill-count-sub">Prints completed today</div>
+          <!-- Bottom Floating Chip -->
+          <div class="landing-floating-chip chip-bottom">
+            <div class="chip-icon-box">🖨️</div>
+            <div class="chip-text-group">
+              <div class="chip-stat-num" id="landing-print-count">1,482</div>
+              <div class="chip-subtitle">Prints completed today</div>
             </div>
-            <div class="float-pill-qr-icon">📱</div>
+            <div class="chip-sparkle-icon">✨</div>
           </div>
         </div>
       </div>
-    </div>
+    </main>
 
     <!-- BOTTOM FOOTER BAR -->
-    <div class="landing-bottom-bar">
-      <div class="footer-prompt-left">
-        <span class="footer-prompt-dot"></span>
-        <span>Touch screen or wave your hand to begin</span>
-        <span class="footer-prompt-sub">• Tekan layar atau lambaikan tangan</span>
+    <footer class="landing-bottom-bar">
+      <div class="landing-footer-left">
+        <span class="landing-footer-dot purple">●</span>
+        <span class="landing-footer-txt">Touch screen or wave your hand to begin</span>
+        <span class="landing-footer-sep">•</span>
+        <span class="landing-footer-sub">Tekan layar atau lambaikan tangan</span>
       </div>
 
-      <div class="footer-status-right">
-        <div class="footer-key-badge">
-          <span class="kbd-tag">SPACE</span>
-          <span>or Click to Start</span>
-        </div>
-        <div class="footer-paper-status">
-          <span class="footer-paper-dot"></span>
-          <span>Thermal Roll 84% Available</span>
-        </div>
+      <div class="landing-footer-right">
+        <kbd class="landing-kbd">SPACE</kbd>
+        <span class="landing-footer-txt">or Click to Start</span>
+        <span class="landing-footer-sep">•</span>
+        <span class="landing-footer-dot green">●</span>
+        <span class="landing-footer-sub">Thermal Roll &amp; Art Paper Available</span>
       </div>
-    </div>
+    </footer>
   </div>
 
   <!-- CAMERA SCREEN -->
@@ -7650,6 +7682,25 @@ function updateState(data) {
 
   updateScreenContent(s, data);
 
+  // Update landing screen top camera pill
+  const camDot = document.getElementById('landing-cam-dot');
+  const camTitle = document.getElementById('landing-cam-title');
+  const camDetail = document.getElementById('landing-cam-detail');
+  if (camTitle && cam) {
+    if (cam.ok) {
+      if (camDot) camDot.style.background = '#10B981';
+      camTitle.textContent = 'Live Camera: Calibrated';
+      const devName = cam.device_name || 'Optical Sensor';
+      const fps = cam.actual_fps ? `${cam.actual_fps}fps` : '60fps';
+      const res = (cam.actual_width && cam.actual_height) ? `${cam.actual_width}x${cam.actual_height}` : '4K Ultra-Sense';
+      if (camDetail) camDetail.textContent = `${devName} • ${res} ${fps}`;
+    } else {
+      if (camDot) camDot.style.background = '#EF4444';
+      camTitle.textContent = 'Camera: Connecting...';
+      if (camDetail) camDetail.textContent = cam.error || 'Initializing Optical Device...';
+    }
+  }
+
   // Diagnostics update if panel open
   if (settingsOpen) {
     updateDiagnosticsView(cam, g);
@@ -7682,12 +7733,12 @@ function updateMiniCamera(screenName) {
   const miniStream = document.getElementById('mini-camera-stream');
   if (!miniCam) return;
 
-  const isCamera = (screenName === 'camera' || screenName === 'landing');
-  if (isCamera) {
+  const hideMini = (screenName === 'camera' || screenName === 'landing');
+  if (hideMini) {
     if (miniCam.classList.contains('visible')) {
       miniCam.classList.remove('visible');
     }
-    // Stop mini camera stream to save resources when on main camera screen or landing screen
+    // Stop mini camera stream to save resources when on main camera or landing screen
     if (miniStream && miniStream.src && miniStream.src.indexOf('/video_feed') !== -1) {
       miniStream.src = '';
     }
@@ -7705,7 +7756,7 @@ function updateMiniCamera(screenName) {
 function ensureMiniCameraStream() {
   const miniCam = document.getElementById('mini-camera-preview');
   const miniStream = document.getElementById('mini-camera-stream');
-  if (miniCam && miniStream && appState.screen !== 'camera') {
+  if (miniCam && miniStream && appState.screen !== 'camera' && appState.screen !== 'landing') {
     miniStream.src = '/video_feed?t=' + Date.now();
   }
 }
@@ -7760,25 +7811,9 @@ function transitionToScreen(name) {
       if (el) el.src = `/api/photo_preview/${i}?t=${Date.now()}`;
     }
   }
-function handleLandingScreenClick(e) {
-  if (e.target.closest('button') || e.target.closest('.btn-interactive') || e.target.closest('.camera-status-pill') || e.target.closest('#settings-modal')) return;
-  doAction('start_camera');
 }
 
 function updateScreenContent(s, data) {
-  if (appState.screen === 'landing') {
-    const camNameEl = document.getElementById('landing-cam-name-text');
-    if (camNameEl && data.camera && data.camera.device_name) {
-      const fps = data.camera.actual_fps ? `${Math.round(data.camera.actual_fps)}fps` : '60fps';
-      const res = (data.camera.actual_width && data.camera.actual_height) ? `${data.camera.actual_width}x${data.camera.actual_height}` : '4K Optical';
-      camNameEl.textContent = `${data.camera.device_name} • ${res} ${fps}`;
-    }
-    const camStatusEl = document.getElementById('landing-cam-status-text');
-    if (camStatusEl) {
-      camStatusEl.textContent = appState.cameraOk ? 'Live Camera: Calibrated' : 'Live Camera: Connecting...';
-    }
-  }
-
   if (appState.screen === 'camera') {
     const retakeSlot = s.retake_slot_target;
     if (retakeSlot) {
@@ -8221,6 +8256,11 @@ function updateGestureHUD() {
   document.getElementById('gest-fist')?.classList.toggle('active', g === 'fist');
   document.getElementById('gest-peace')?.classList.toggle('active', g === 'peace');
 
+  // Update landing screen gesture cards
+  document.getElementById('landing-card-palm')?.classList.toggle('active', g === 'palm');
+  document.getElementById('landing-card-fist')?.classList.toggle('active', g === 'fist');
+  document.getElementById('landing-card-peace')?.classList.toggle('active', g === 'peace');
+
   // Update floating mini camera feedback so user always knows gesture status
   const miniCam = document.getElementById('mini-camera-preview');
   if (miniCam) {
@@ -8345,7 +8385,9 @@ function clearGestureUI() {
 }
 
 function handlePeaceAction() {
-  if (appState.screen === 'camera') {
+  if (appState.screen === 'landing') {
+    doAction('start_camera');
+  } else if (appState.screen === 'camera') {
     if (!countdownRunning) startClientCountdown();
   } else if (appState.screen === 'review') {
     doAction('use_photos');
@@ -8573,19 +8615,19 @@ function setupKeyboard() {
       toggleSettings();
       return false;
     }
-    if (e.key === ' ' || e.code === 'Space') {
-      if (appState.screen === 'landing' && !settingsOpen) {
-        e.preventDefault();
-        e.stopPropagation();
-        doAction('start_camera');
-        return false;
-      }
-    }
     if (e.key === 'Escape' || e.code === 'Escape' || e.keyCode === 27) {
       if (settingsOpen) {
         e.preventDefault();
         e.stopPropagation();
         closeSettings();
+        return false;
+      }
+    }
+    if ((e.code === 'Space' || e.key === ' ' || e.code === 'Enter' || e.key === 'Enter') && appState.screen === 'landing') {
+      if (!settingsOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        doAction('start_camera');
         return false;
       }
     }
