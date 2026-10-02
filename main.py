@@ -3857,14 +3857,14 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 }
 
 /* ============================================================
-   NEW LANDING SCREEN (STUDIO DARK THEME - MATCHING REFERENCE LAYOUT)
+   NEW LANDING SCREEN (RESTORED PHOTOBOOTH ORIGINAL THEME & COLORS)
    ============================================================ */
 #screen-landing {
   background: var(--col-bg);
   background-image:
-    radial-gradient(ellipse 65% 55% at 20% 45%, rgba(88, 78, 184, 0.18) 0%, transparent 70%),
-    radial-gradient(ellipse 50% 50% at 85% 30%, rgba(99, 102, 241, 0.12) 0%, transparent 65%),
-    radial-gradient(circle at 98% 50%, rgba(255, 255, 255, 0.05) 1.5px, transparent 1.5px);
+    radial-gradient(ellipse 65% 55% at 20% 45%, rgba(88, 78, 184, 0.09) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 50% at 85% 30%, rgba(88, 78, 184, 0.05) 0%, transparent 65%),
+    radial-gradient(circle at 98% 50%, rgba(17, 19, 24, 0.04) 1.5px, transparent 1.5px);
   background-size: 100% 100%, 100% 100%, 28px 28px;
   padding: 0;
   display: flex;
@@ -3892,23 +3892,22 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   align-items: center;
   gap: 12px;
   padding: 6px 18px 6px 8px;
-  background: rgba(23, 26, 38, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
   border-radius: var(--r-full);
-  backdrop-filter: blur(16px);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-sm);
 }
 
 .landing-cam-avatar {
   width: 38px;
   height: 38px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2E3650, #171A26);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: var(--grad-blue-soft);
+  border: 1px solid var(--col-border);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #A5B4FC;
+  color: var(--col-blue-1);
 }
 
 .landing-cam-info {
@@ -3927,8 +3926,8 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #10B981;
-  box-shadow: 0 0 10px #10B981;
+  background: var(--col-success);
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.45);
 }
 
 .landing-status-dot.pulse {
@@ -3943,7 +3942,7 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 .landing-cam-status-title {
   font-size: 13px;
   font-weight: 700;
-  color: var(--col-text-1);
+  color: var(--col-text);
 }
 
 .landing-cam-detail {
@@ -3963,26 +3962,25 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   align-items: center;
   gap: 8px;
   padding: 8px 18px;
-  background: rgba(23, 26, 38, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
   border-radius: var(--r-full);
   font-size: 12px;
   font-weight: 600;
   color: var(--col-text-2);
-  backdrop-filter: blur(16px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--shadow-sm);
 }
 
 .landing-spec-dot.green {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #10B981;
-  box-shadow: 0 0 8px #10B981;
+  background: var(--col-success);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.4);
 }
 
 .landing-spec-icon.gold {
-  color: #FDC00F;
+  color: var(--col-yellow-dark);
 }
 
 /* HERO GRID */
@@ -4011,32 +4009,32 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 16px;
-  background: rgba(88, 78, 184, 0.16);
-  border: 1px solid rgba(99, 102, 241, 0.35);
+  padding: 6px 18px;
+  background: var(--grad-blue-soft);
+  border: 1px solid var(--col-border);
   border-radius: var(--r-full);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 1px;
-  color: #C7D2FE;
+  color: var(--col-blue-1);
   text-transform: uppercase;
 }
 
 .badge-sparkle {
-  color: #818CF8;
+  color: var(--col-blue-1);
 }
 
 .landing-headline {
   font-size: clamp(38px, 4.4vw, 56px);
   font-weight: 900;
   line-height: 1.1;
-  color: #FFFFFF;
+  color: var(--col-text);
   margin: 0;
   letter-spacing: -1px;
 }
 
 .landing-headline-gradient {
-  background: linear-gradient(135deg, #6366F1 0%, #A855F7 50%, #EC4899 100%);
+  background: var(--grad-blue);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   display: inline-block;
@@ -4063,26 +4061,26 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   align-items: center;
   gap: 14px;
   padding: 12px 28px 12px 14px;
-  background: linear-gradient(135deg, #584EB8 0%, #4338CA 100%);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: var(--grad-blue);
+  border: none;
   border-radius: var(--r-full);
   color: #FFFFFF;
-  box-shadow: 0 8px 28px rgba(88, 78, 184, 0.45);
+  box-shadow: var(--shadow-blue);
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .landing-btn-primary:hover, .landing-btn-primary.hovered {
   transform: scale(1.03);
-  box-shadow: 0 12px 36px rgba(88, 78, 184, 0.65), 0 0 20px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 12px 36px rgba(88, 78, 184, 0.45);
 }
 
 .landing-btn-star-badge {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: rgba(253, 192, 15, 0.2);
-  border: 1.5px solid #FDC00F;
+  background: rgba(253, 192, 15, 0.25);
+  border: 1.5px solid var(--col-yellow);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4100,18 +4098,20 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   font-size: 16px;
   font-weight: 800;
   letter-spacing: -0.2px;
+  color: #FFFFFF;
 }
 
 .landing-btn-sub-label {
   font-size: 11px;
   font-weight: 600;
-  color: #FDC00F;
+  color: var(--col-yellow);
 }
 
 .landing-btn-arrow {
   font-size: 20px;
   font-weight: 800;
   margin-left: 6px;
+  color: #FFFFFF;
   transition: transform 0.2s ease;
 }
 
@@ -4125,23 +4125,23 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   align-items: center;
   gap: 12px;
   padding: 12px 22px;
-  background: rgba(23, 26, 38, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
   border-radius: var(--r-full);
-  color: var(--col-text-1);
-  backdrop-filter: blur(12px);
+  color: var(--col-text);
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
   transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
 }
 
 .landing-btn-dwell:hover, .landing-btn-dwell.hovered {
-  background: rgba(33, 38, 56, 0.85);
-  border-color: rgba(99, 102, 241, 0.4);
+  background: var(--col-surface-2);
+  border-color: var(--col-blue-1);
   transform: scale(1.02);
 }
 
 .landing-dwell-icon-box {
-  color: #A5B4FC;
+  color: var(--col-blue-1);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4156,6 +4156,7 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 .landing-dwell-title {
   font-size: 13px;
   font-weight: 700;
+  color: var(--col-text);
 }
 
 .landing-dwell-sub {
@@ -4168,12 +4169,11 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 .landing-gesture-card-box {
   width: 100%;
   max-width: 540px;
-  background: rgba(23, 26, 38, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
   border-radius: 22px;
   padding: 18px 22px;
-  backdrop-filter: blur(16px);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-md);
   box-sizing: border-box;
 }
 
@@ -4191,11 +4191,11 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 1.2px;
-  color: #A5B4FC;
+  color: var(--col-blue-1);
 }
 
 .landing-tag-dot {
-  color: #6366F1;
+  color: var(--col-blue-1);
   font-size: 10px;
 }
 
@@ -4212,8 +4212,8 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 }
 
 .landing-gest-card {
-  background: rgba(33, 38, 56, 0.55);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--col-bg-2);
+  border: 1px solid var(--col-border);
   border-radius: 16px;
   padding: 12px 8px;
   text-align: center;
@@ -4222,9 +4222,9 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 }
 
 .landing-gest-card.active {
-  background: rgba(99, 102, 241, 0.25);
-  border-color: #818CF8;
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.45);
+  background: var(--grad-blue-soft);
+  border-color: var(--col-blue-1);
+  box-shadow: 0 0 16px rgba(88, 78, 184, 0.25);
   transform: translateY(-3px);
 }
 
@@ -4236,7 +4236,7 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 .gest-card-name {
   font-size: 13px;
   font-weight: 700;
-  color: var(--col-text-1);
+  color: var(--col-text);
 }
 
 .gest-card-desc {
@@ -4246,11 +4246,11 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 }
 
 .landing-gest-card.active .gest-card-name {
-  color: #FFFFFF;
+  color: var(--col-blue-1);
 }
 
 .landing-gest-card.active .gest-card-desc {
-  color: #C7D2FE;
+  color: var(--col-blue-1);
 }
 
 /* RIGHT HERO COLUMN: 3D STRIP MOCKUP */
@@ -4275,7 +4275,7 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   width: 320px;
   height: 480px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.22) 0%, rgba(236, 72, 153, 0.08) 50%, transparent 75%);
+  background: radial-gradient(circle, rgba(88, 78, 184, 0.12) 0%, rgba(253, 192, 15, 0.06) 50%, transparent 75%);
   filter: blur(40px);
   z-index: 1;
   pointer-events: none;
@@ -4290,10 +4290,10 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   border-radius: 20px;
   overflow: hidden;
   box-shadow:
-    0 24px 60px -10px rgba(0, 0, 0, 0.85),
-    0 0 35px rgba(99, 102, 241, 0.2),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.15);
-  background: #111318;
+    0 20px 48px -10px rgba(17, 19, 24, 0.2),
+    0 0 30px rgba(88, 78, 184, 0.12),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.8);
+  background: var(--col-surface);
   transform: rotate(2.5deg) translateY(-2px);
   transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.4s ease;
   cursor: pointer;
@@ -4302,9 +4302,9 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 .landing-strip-card:hover {
   transform: rotate(0deg) scale(1.02);
   box-shadow:
-    0 32px 75px -10px rgba(0, 0, 0, 0.95),
-    0 0 50px rgba(99, 102, 241, 0.35),
-    inset 0 0 0 1.5px rgba(255, 255, 255, 0.25);
+    0 28px 60px -10px rgba(17, 19, 24, 0.3),
+    0 0 35px rgba(88, 78, 184, 0.22),
+    inset 0 0 0 1.5px rgba(255, 255, 255, 0.9);
 }
 
 .landing-strip-image {
@@ -4317,7 +4317,7 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 .strip-card-sheen {
   position: absolute;
   inset: 0;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12) 0%, transparent 45%, rgba(0, 0, 0, 0.2) 100%);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.25) 0%, transparent 45%, rgba(17, 19, 24, 0.08) 100%);
   pointer-events: none;
 }
 
@@ -4325,15 +4325,14 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 .landing-floating-chip {
   position: absolute;
   z-index: 4;
-  background: rgba(23, 26, 38, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: var(--col-surface);
+  border: 1px solid var(--col-border);
   border-radius: 18px;
   padding: 10px 16px;
   display: flex;
   align-items: center;
   gap: 12px;
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-md);
   animation: floatChip 4s infinite ease-in-out;
 }
 
@@ -4351,8 +4350,8 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: rgba(99, 102, 241, 0.2);
-  border: 1px solid rgba(99, 102, 241, 0.4);
+  background: var(--grad-blue-soft);
+  border: 1px solid var(--col-border);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4362,8 +4361,8 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #818CF8;
-  box-shadow: 0 0 10px #818CF8;
+  background: var(--col-blue-1);
+  box-shadow: 0 0 10px rgba(88, 78, 184, 0.4);
 }
 
 .landing-floating-chip.chip-bottom {
@@ -4376,8 +4375,8 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: rgba(253, 192, 15, 0.15);
-  border: 1px solid rgba(253, 192, 15, 0.3);
+  background: rgba(253, 192, 15, 0.18);
+  border: 1px solid rgba(253, 192, 15, 0.35);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4393,7 +4392,7 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 .chip-title {
   font-size: 13px;
   font-weight: 700;
-  color: #FFFFFF;
+  color: var(--col-text);
 }
 
 .chip-subtitle {
@@ -4405,13 +4404,13 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 .chip-stat-num {
   font-size: 17px;
   font-weight: 800;
-  color: #FFFFFF;
+  color: var(--col-text);
   line-height: 1.1;
   letter-spacing: -0.3px;
 }
 
 .chip-sparkle-icon {
-  color: #818CF8;
+  color: var(--col-blue-1);
   font-size: 14px;
   margin-left: 4px;
 }
@@ -4424,9 +4423,8 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   padding: 14px 48px;
   width: 100%;
   box-sizing: border-box;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(13, 15, 23, 0.7);
-  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--col-border);
+  background: var(--col-surface);
   z-index: 10;
 }
 
@@ -4438,12 +4436,12 @@ body.gesture-control .frame-card:hover:not(.hovered) {
 }
 
 .landing-footer-dot.purple {
-  color: #818CF8;
+  color: var(--col-blue-1);
   font-size: 12px;
 }
 
 .landing-footer-dot.green {
-  color: #10B981;
+  color: var(--col-success);
   font-size: 12px;
 }
 
@@ -4465,11 +4463,11 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   padding: 2px 7px;
   font-size: 11px;
   font-weight: 700;
-  background: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: var(--col-bg-2);
+  border: 1px solid var(--col-border);
   border-radius: 6px;
-  color: var(--col-text-1);
-  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.5);
+  color: var(--col-text);
+  box-shadow: 0 2px 0 rgba(17, 19, 24, 0.08);
 }
 
 @media (max-height: 720px) {
@@ -7688,14 +7686,14 @@ function updateState(data) {
   const camDetail = document.getElementById('landing-cam-detail');
   if (camTitle && cam) {
     if (cam.ok) {
-      if (camDot) camDot.style.background = '#10B981';
+      if (camDot) camDot.style.background = 'var(--col-success)';
       camTitle.textContent = 'Live Camera: Calibrated';
       const devName = cam.device_name || 'Optical Sensor';
       const fps = cam.actual_fps ? `${cam.actual_fps}fps` : '60fps';
       const res = (cam.actual_width && cam.actual_height) ? `${cam.actual_width}x${cam.actual_height}` : '4K Ultra-Sense';
       if (camDetail) camDetail.textContent = `${devName} • ${res} ${fps}`;
     } else {
-      if (camDot) camDot.style.background = '#EF4444';
+      if (camDot) camDot.style.background = 'var(--col-error)';
       camTitle.textContent = 'Camera: Connecting...';
       if (camDetail) camDetail.textContent = cam.error || 'Initializing Optical Device...';
     }
