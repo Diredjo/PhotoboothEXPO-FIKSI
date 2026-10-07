@@ -180,7 +180,7 @@ CAMERA_MIRROR = True          # Horizontally flip preview
 CAMERA_ROTATE = 0             # 0, 90, 180, 270 degrees
 
 # ---- CONTROLLER & GESTURE ----
-CONTROLLER_MODE = "gesture_only"  # 'gesture_only' (full hand gesture, touchpad/mouse disabled) or 'hybrid'
+CONTROLLER_MODE = "gesture_only"  # 'gesture_only', 'hybrid', or 'touchpad_only'
 BLOCK_TOUCHPAD = True             # Strictly block touchpad and physical mouse on kiosk
 HAND_CONFIDENCE = 0.55        # Min detection confidence
 GESTURE_CONFIDENCE = 0.60     # Min gesture recognition confidence
@@ -326,6 +326,31 @@ config = {
     "controller_mode": CONTROLLER_MODE,
     "block_touchpad": BLOCK_TOUCHPAD,
 }
+
+CONFIG_FILE = BASE_DIR / "config.json"
+
+def load_persistent_config():
+    global config
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                if isinstance(saved, dict):
+                    for k, v in saved.items():
+                        if k in config:
+                            config[k] = v
+                    print(f"[CONFIG] Loaded persistent config from {CONFIG_FILE.name}: mode={config.get('controller_mode')}")
+        except Exception as e:
+            print(f"[CONFIG LOAD ERROR] {e}")
+
+def save_persistent_config():
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        print(f"[CONFIG SAVE ERROR] {e}")
+
+load_persistent_config()
 
 # ============================================================
 # SESSION STATE MACHINE
@@ -2742,12 +2767,7 @@ def api_state():
             "debug_mode": config["debug_mode"],
         },
         "config": {
-            "click_threshold_ms": config["click_threshold_ms"],
-            "click_cooldown_ms": config["click_cooldown_ms"],
-            "peace_threshold_ms": config["peace_threshold_ms"],
-            "countdown_duration": config["countdown_duration"],
-            "flash_duration_ms": config["flash_duration_ms"],
-            "dark_mode": config["dark_mode"],
+            **config
         },
         "has_final": bool(final_path and os.path.exists(final_path)),
         "final_session_id": session.session_id,
@@ -3355,6 +3375,17 @@ def api_settings():
         for k, v in updates.items():
             if k in allowed:
                 config[k] = v
+        if updates.get("controller_mode") in ("hybrid", "touchpad_only"):
+            config["block_touchpad"] = False
+        elif updates.get("controller_mode") == "gesture_only":
+            config["block_touchpad"] = True
+        elif "block_touchpad" in updates:
+            if updates["block_touchpad"]:
+                config["controller_mode"] = "gesture_only"
+            else:
+                if config.get("controller_mode") == "gesture_only":
+                    config["controller_mode"] = "hybrid"
+        save_persistent_config()
         if updates.get("selected_camera_id"):
             camera_device_manager.select_device(updates["selected_camera_id"])
         if updates.get("restart_camera"):
@@ -3906,6 +3937,33 @@ body.gesture-control .frame-card {
   cursor: default !important;
 }
 
+/* KIOSK HYBRID & FULL TOUCHPAD MODE: EXPLICIT PHYSICAL CURSOR & INTERACTION */
+body.hybrid-control,
+body.hybrid-control .screen,
+body.touchpad-control,
+body.touchpad-control .screen {
+  cursor: default !important;
+}
+
+body.hybrid-control button,
+body.hybrid-control .btn,
+body.hybrid-control .btn-interactive,
+body.hybrid-control .landing-cta-btn,
+body.hybrid-control .frame-card,
+body.hybrid-control .review-card,
+body.hybrid-control .camera-shutter-btn,
+body.hybrid-control [onclick],
+body.touchpad-control button,
+body.touchpad-control .btn,
+body.touchpad-control .btn-interactive,
+body.touchpad-control .landing-cta-btn,
+body.touchpad-control .frame-card,
+body.touchpad-control .review-card,
+body.touchpad-control .camera-shutter-btn,
+body.touchpad-control [onclick] {
+  cursor: pointer !important;
+}
+
 /* Prevent native mouse hover scaling when in gesture mode; only virtual cursor hover triggers */
 body.gesture-control .btn:hover:not(.hovered),
 body.gesture-control .landing-cta-btn:hover:not(.hovered),
@@ -4194,6 +4252,92 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   opacity: 0; pointer-events: none;
   z-index: 100;
   transition: opacity 80ms ease-out;
+}
+
+/* CAMERA SHUTTER BUTTON (HYBRID & GESTURE READY) */
+.camera-shutter-bar {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 36;
+  pointer-events: auto;
+}
+
+.camera-shutter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 28px 12px 18px;
+  background: rgba(18, 20, 29, 0.88);
+  backdrop-filter: blur(14px);
+  border: 2px solid rgba(253, 192, 15, 0.7);
+  border-radius: var(--r-full);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 0 20px rgba(253, 192, 15, 0.25);
+  transition: all var(--tr-fast);
+  user-select: none;
+}
+
+.camera-shutter-btn:hover,
+.camera-shutter-btn.hovered {
+  background: rgba(28, 32, 48, 0.98);
+  border-color: var(--col-yellow);
+  transform: scale(1.06);
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.55), 0 0 28px rgba(253, 192, 15, 0.45);
+}
+
+.camera-shutter-btn:active,
+.camera-shutter-btn.gesture-clicked {
+  transform: scale(0.96);
+}
+
+.camera-shutter-btn.counting {
+  opacity: 0.6;
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+.shutter-icon-circle {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2.5px solid var(--col-yellow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(253, 192, 15, 0.18);
+}
+
+.shutter-inner-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--col-yellow);
+  box-shadow: 0 0 8px var(--col-yellow);
+}
+
+.shutter-btn-label {
+  font-family: var(--font-head);
+  letter-spacing: 0.5px;
+  font-size: 15px;
+}
+
+.shutter-shortcut-hint {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--r-full);
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--col-yellow);
+  font-weight: 600;
+  letter-spacing: 0.5px;
 }
 
 /* REVIEW SCREEN */
@@ -5953,7 +6097,7 @@ body.dark-mode .gallery-zoom-card {
   <div class="screen active" id="screen-landing">
     <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center;">
       <div class="brand-badge">Rencana Tuhan Studio</div>
-      <div class="controller-status-pill"><span class="ctrl-dot"></span><span>🎮 FULL GESTURE CONTROLLER</span></div>
+      <div class="controller-status-pill"><span class="ctrl-dot"></span><span id="landing-ctrl-badge">🎮 FULL GESTURE CONTROLLER</span></div>
     </div>
     <h1 class="landing-title">Capture Your Joy,<br>Touch-Free.</h1>
     <p class="landing-sub">Step into the future of studio photography. Use natural hand gestures to create and print your memories.</p>
@@ -5963,7 +6107,7 @@ body.dark-mode .gallery-zoom-card {
       <span>→</span>
     </button>
 
-    <div class="gesture-guide-pill">
+    <div class="gesture-guide-pill" id="landing-guide-pill">
       <div class="guide-step">
         <span class="guide-step-icon">✋</span>
         <span>Open Palm = Move Cursor</span>
@@ -5977,7 +6121,7 @@ body.dark-mode .gallery-zoom-card {
         <span>Hold Peace = Snap Photo</span>
       </div>
     </div>
-    <div style="font-size: 11px; color: var(--col-text-3); font-weight: 600; margin-top: -12px;">
+    <div id="landing-ctrl-hint" style="font-size: 11px; color: var(--col-text-3); font-weight: 600; margin-top: -12px;">
       🚫 Touchpad & mouse dinonaktifkan • Kontrol 100% menggunakan gestur tangan
     </div>
   </div>
@@ -5985,7 +6129,7 @@ body.dark-mode .gallery-zoom-card {
   <!-- CAMERA SCREEN -->
   <div class="screen" id="screen-camera">
     <div class="camera-container">
-      <img id="camera-stream" src="/video_feed" alt="Live Feed" onerror="setTimeout(ensureCameraStream, 1500)">
+      <img id="camera-stream" src="/video_feed" alt="Live Feed" onerror="setTimeout(ensureCameraStream, 1500)" onclick="triggerStreamCapture()" title="Klik layar untuk mengambil foto">
 
       <div class="camera-header-hud">
         <div class="camera-dots">
@@ -6005,6 +6149,17 @@ body.dark-mode .gallery-zoom-card {
           <circle class="peace-ring-circle-fg" id="peace-ring-fill" cx="70" cy="70" r="60"></circle>
         </svg>
         <div class="peace-ring-label">HOLD ✌️</div>
+      </div>
+
+      <!-- Shutter Button (For Touchpad/Mouse & Hand Gesture Click) -->
+      <div class="camera-shutter-bar" id="camera-shutter-bar">
+        <button class="camera-shutter-btn btn-interactive" id="camera-shutter-btn" onclick="triggerManualCapture()" title="Ambil Foto (Klik Touchpad / Tahan ✌️)">
+          <span class="shutter-icon-circle">
+            <span class="shutter-inner-dot"></span>
+          </span>
+          <span class="shutter-btn-label" id="shutter-btn-label">AMBIL FOTO</span>
+          <span class="shutter-shortcut-hint">KLIK / TAHAN ✌️</span>
+        </button>
       </div>
 
       <!-- Countdown -->
@@ -6318,22 +6473,23 @@ body.dark-mode .gallery-zoom-card {
             <div class="settings-row">
               <div class="settings-label">
                 <strong>Mode Controller</strong>
-                <span class="settings-hint">Kiosk dioperasikan melalui gestur tangan (touchpad dapat dikunci).</span>
+                <span class="settings-hint">Pilih metode input kiosk: Full Gesture tangan, Hybrid (keduanya), atau Full Touchpad/Mouse.</span>
               </div>
               <div class="settings-control">
-                <select id="cfg-controller_mode">
+                <select id="cfg-controller_mode" onchange="onControllerModeChanged(this.value)">
                   <option value="gesture_only">Full Gesture Tangan (Touchpad Diblokir)</option>
                   <option value="hybrid">Hybrid (Gesture + Touchpad/Mouse)</option>
+                  <option value="touchpad_only">Full Touchpad / Mouse (Gesture Nonaktif)</option>
                 </select>
               </div>
             </div>
             <div class="settings-row">
               <div class="settings-label">
                 <strong>Blokir Touchpad & Mouse Fisik</strong>
-                <span class="settings-hint">Nonaktifkan semua klik dan gerakan touchpad pada layar photobooth.</span>
+                <span class="settings-hint">Kunci touchpad laptop & mouse agar pengguna hanya memakai gestur tangan.</span>
               </div>
               <div class="settings-control">
-                <div class="settings-toggle on" id="cfg-block_touchpad" onclick="toggleSetting(this)"></div>
+                <div class="settings-toggle on" id="cfg-block_touchpad" onclick="onTouchpadBlockToggle(this)"></div>
               </div>
             </div>
           </div>
@@ -6901,8 +7057,9 @@ function setupTouchpadBlocker() {
       }
 
       // If full gesture mode is active (default)
-      const isGestureOnly = (appState.config.controller_mode !== 'hybrid') && (appState.config.block_touchpad !== false);
-      if (!isGestureOnly) return;
+      const mode = appState.config.controller_mode;
+      const isTouchpadBlocked = (mode === 'gesture_only') || (appState.config.block_touchpad === true && mode !== 'hybrid' && mode !== 'touchpad_only');
+      if (!isTouchpadBlocked) return;
 
       // Allow programmatic gesture-initiated dispatch
       if (isGestureDispatching || !e.isTrusted) {
@@ -6934,18 +7091,111 @@ function setupTouchpadBlocker() {
 
 function applyControllerConfig(cfg) {
   if (!cfg) return;
-  const isGestureOnly = (cfg.controller_mode !== 'hybrid') && (cfg.block_touchpad !== false);
+  const mode = cfg.controller_mode || (cfg.block_touchpad === false ? 'hybrid' : 'gesture_only');
+  const isGestureOnly = (mode === 'gesture_only');
+  const isHybrid = (mode === 'hybrid');
+  const isTouchpadOnly = (mode === 'touchpad_only');
+
   document.body.classList.toggle('gesture-control', isGestureOnly);
+  document.body.classList.toggle('hybrid-control', isHybrid);
+  document.body.classList.toggle('touchpad-control', isTouchpadOnly);
 
   const ctrlTxt = document.getElementById('hud-ctrl-text');
   if (ctrlTxt) {
-    ctrlTxt.textContent = isGestureOnly ? 'FULL GESTURE' : 'HYBRID MODE';
+    ctrlTxt.textContent = isGestureOnly ? 'FULL GESTURE' : (isTouchpadOnly ? 'FULL TOUCHPAD' : 'HYBRID MODE');
+  }
+
+  const landingBadge = document.getElementById('landing-ctrl-badge');
+  if (landingBadge) {
+    if (isGestureOnly) {
+      landingBadge.textContent = '🎮 FULL GESTURE CONTROLLER';
+    } else if (isTouchpadOnly) {
+      landingBadge.textContent = '🖱️ FULL TOUCHPAD / MOUSE';
+    } else {
+      landingBadge.textContent = '🎮 HYBRID CONTROLLER';
+    }
+  }
+
+  const landingHint = document.getElementById('landing-ctrl-hint');
+  if (landingHint) {
+    if (isGestureOnly) {
+      landingHint.innerHTML = '🚫 Touchpad & mouse dinonaktifkan • Kontrol 100% menggunakan gestur tangan';
+    } else if (isTouchpadOnly) {
+      landingHint.innerHTML = '🖱️ <b>Mode Full Touchpad:</b> Gunakan touchpad / mouse untuk navigasi dan mengambil foto';
+    } else {
+      landingHint.innerHTML = '✨ <b>Mode Hybrid:</b> Gestur tangan (✋/✊/✌️) & Touchpad/Mouse keduanya aktif bersamaan';
+    }
+  }
+
+  const landingGuide = document.getElementById('landing-guide-pill');
+  if (landingGuide) {
+    if (isTouchpadOnly) {
+      landingGuide.innerHTML = `
+        <div class="guide-step">
+          <span class="guide-step-icon">🖱️</span>
+          <span>Arahkan Touchpad / Mouse</span>
+        </div>
+        <div class="guide-step">
+          <span class="guide-step-icon">👆</span>
+          <span>Klik Tombol / Foto / Frame</span>
+        </div>
+        <div class="guide-step">
+          <span class="guide-step-icon">📸</span>
+          <span>Klik Shutter untuk Ambil Foto</span>
+        </div>
+      `;
+    } else {
+      landingGuide.innerHTML = `
+        <div class="guide-step">
+          <span class="guide-step-icon">✋</span>
+          <span>Open Palm = Move Cursor</span>
+        </div>
+        <div class="guide-step">
+          <span class="guide-step-icon">✊</span>
+          <span>Hold Fist = Select / Click</span>
+        </div>
+        <div class="guide-step">
+          <span class="guide-step-icon">✌️</span>
+          <span>Hold Peace = Snap Photo</span>
+        </div>
+      `;
+    }
+  }
+
+  const shutterLabel = document.getElementById('shutter-btn-label');
+  if (shutterLabel) {
+    if (isGestureOnly) {
+      shutterLabel.textContent = 'AMBIL FOTO (✌️)';
+    } else if (isTouchpadOnly) {
+      shutterLabel.textContent = 'AMBIL FOTO (KLIK)';
+    } else {
+      shutterLabel.textContent = 'AMBIL FOTO';
+    }
+  }
+
+  const shutterHint = document.querySelector('.shutter-shortcut-hint');
+  if (shutterHint) {
+    if (isGestureOnly) {
+      shutterHint.textContent = 'TAHAN POSE ✌️';
+    } else if (isTouchpadOnly) {
+      shutterHint.textContent = 'KLIK TOUCHPAD';
+    } else {
+      shutterHint.textContent = 'KLIK / TAHAN ✌️';
+    }
   }
 
   const diagMode = document.getElementById('diag-ctrl-mode');
   if (diagMode) {
-    diagMode.textContent = isGestureOnly ? 'FULL GESTURE' : 'HYBRID';
-    diagMode.style.color = isGestureOnly ? 'var(--col-blue-1)' : 'var(--col-yellow)';
+    if (isGestureOnly) {
+      diagMode.textContent = 'FULL GESTURE';
+      diagMode.style.color = 'var(--col-blue-1)';
+    } else if (isTouchpadOnly) {
+      diagMode.textContent = 'FULL TOUCHPAD';
+      diagMode.style.color = 'var(--col-success)';
+    } else {
+      diagMode.textContent = 'HYBRID';
+      diagMode.style.color = 'var(--col-yellow)';
+    }
   }
 
   const diagPad = document.getElementById('diag-ctrl-touchpad');
@@ -6956,14 +7206,53 @@ function applyControllerConfig(cfg) {
 
   const diagCur = document.getElementById('diag-ctrl-cursor');
   if (diagCur) {
-    diagCur.textContent = isGestureOnly ? 'TERSEMBUNYI' : 'TERLIHAT';
+    diagCur.textContent = isGestureOnly ? 'TERSEMBUNYI' : 'TERLIHAT (AKTIF)';
+    diagCur.style.color = isGestureOnly ? 'var(--col-text-2)' : 'var(--col-success)';
   }
 
   const diagTrack = document.getElementById('diag-ctrl-tracker');
   if (diagTrack) {
-    diagTrack.textContent = appState.handDetected ? 'DETECTED' : 'ONLINE';
-    diagTrack.style.color = appState.handDetected ? 'var(--col-success)' : 'var(--col-text-2)';
+    if (isTouchpadOnly) {
+      diagTrack.textContent = 'STANDBY (OFF)';
+      diagTrack.style.color = 'var(--col-text-2)';
+    } else {
+      diagTrack.textContent = appState.handDetected ? 'DETECTED' : 'ONLINE';
+      diagTrack.style.color = appState.handDetected ? 'var(--col-success)' : 'var(--col-text-2)';
+    }
   }
+}
+
+function onControllerModeChanged(val) {
+  const isBlocked = (val === 'gesture_only');
+  const toggleEl = document.getElementById('cfg-block_touchpad');
+  if (toggleEl) {
+    toggleEl.classList.toggle('on', isBlocked);
+  }
+  const preview = Object.assign({}, appState.config, {
+    controller_mode: val,
+    block_touchpad: isBlocked
+  });
+  applyControllerConfig(preview);
+}
+
+function onTouchpadBlockToggle(el) {
+  toggleSetting(el);
+  const isBlocked = el.classList.contains('on');
+  const selEl = document.getElementById('cfg-controller_mode');
+  if (selEl) {
+    if (isBlocked) {
+      selEl.value = 'gesture_only';
+    } else {
+      if (selEl.value === 'gesture_only') {
+        selEl.value = 'hybrid';
+      }
+    }
+  }
+  const preview = Object.assign({}, appState.config, {
+    controller_mode: selEl ? selEl.value : (isBlocked ? 'gesture_only' : 'hybrid'),
+    block_touchpad: isBlocked
+  });
+  applyControllerConfig(preview);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -7674,6 +7963,13 @@ function updateCursorProgress(progress, isFist = true) {
 }
 
 function processGestures(cfg) {
+  // If in touchpad_only mode, disable gesture recognition actions completely
+  if (cfg && cfg.controller_mode === 'touchpad_only') {
+    resetGestureLatches();
+    clearGestureUI();
+    return;
+  }
+
   // If settings modal is open (admin mode), disable booth gesture actions
   if (appState.adminMode || settingsOpen) {
     resetGestureLatches();
@@ -7831,7 +8127,7 @@ function getInteractiveAt(x, y) {
   // 1. Direct hit check via elementFromPoint
   const hit = document.elementFromPoint(x, y);
   if (hit) {
-    const target = hit.closest('button, a, .btn, .btn-interactive, .frame-card, .landing-cta-btn, .review-card, [onclick]');
+    const target = hit.closest('button, a, .btn, .btn-interactive, .frame-card, .landing-cta-btn, .review-card, .camera-shutter-btn, [onclick]');
     if (target && !target.disabled) {
       if (target.closest('.screen.active') || target.closest('#photo-zoom-modal.active')) {
         return target;
@@ -7840,7 +8136,7 @@ function getInteractiveAt(x, y) {
   }
 
   // 2. Proximity search: find closest interactive element within 28px padding
-  const candidates = document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn, .review-card, button, [onclick]');
+  const candidates = document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn, .review-card, .camera-shutter-btn, button, [onclick]');
   let best = null;
   let bestDist = Infinity;
   const pad = 28;
@@ -7885,9 +8181,23 @@ window.addEventListener('focus', () => {
   ensureMiniCameraStream();
 });
 
+function triggerManualCapture() {
+  if (countdownRunning) return;
+  startClientCountdown();
+}
+
+function triggerStreamCapture() {
+  const isGestureOnly = (appState.config.controller_mode === 'gesture_only');
+  if (!isGestureOnly) {
+    triggerManualCapture();
+  }
+}
+
 async function startClientCountdown() {
   if (countdownRunning) return;
   countdownRunning = true;
+  const shutterBtn = document.getElementById('camera-shutter-btn');
+  if (shutterBtn) shutterBtn.classList.add('counting');
   const overlay = document.getElementById('countdown-overlay');
   const numEl = document.getElementById('countdown-number');
   const duration = appState.config.countdown_duration || 3;
@@ -7904,6 +8214,7 @@ async function startClientCountdown() {
 
   overlay.classList.remove('active');
   if (countdownRunning) await triggerCapture();
+  if (shutterBtn) shutterBtn.classList.remove('counting');
   countdownRunning = false;
 }
 
@@ -7926,7 +8237,8 @@ function flashEffect() {
 // ============================================================
 function renderLoop() {
   const cursor = document.getElementById('cursor');
-  if (!appState.handDetected || appState.adminMode || settingsOpen || !appState.cameraOk) {
+  const isTouchpadOnly = (appState.config.controller_mode === 'touchpad_only');
+  if (isTouchpadOnly || !appState.handDetected || appState.adminMode || settingsOpen || !appState.cameraOk) {
     cursor.style.opacity = '0';
   } else {
     cursor.style.opacity = '1';
@@ -7940,14 +8252,16 @@ function renderLoop() {
   }
 
   // Hover detection synchronized with getInteractiveAt
-  if (appState.handDetected && !settingsOpen && !appState.adminMode) {
+  if (!isTouchpadOnly && appState.handDetected && !settingsOpen && !appState.adminMode) {
     const x = appState.cursor.x * window.innerWidth;
     const y = appState.cursor.y * window.innerHeight;
     const activeTarget = getInteractiveAt(x, y);
-    document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn, .review-card, button, [onclick]').forEach(el => {
+    document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn, .review-card, .camera-shutter-btn, button, [onclick]').forEach(el => {
       const isTarget = (el === activeTarget) && !!(el.closest('.screen.active') || el.closest('#photo-zoom-modal.active'));
       el.classList.toggle('hovered', isTarget);
     });
+  } else {
+    document.querySelectorAll('.hovered').forEach(el => el.classList.remove('hovered'));
   }
 
   requestAnimationFrame(renderLoop);
@@ -8220,13 +8534,24 @@ async function saveSettings() {
     }
   });
 
+  if (updates.controller_mode === 'hybrid' || updates.controller_mode === 'touchpad_only') {
+    updates.block_touchpad = false;
+  } else if (updates.controller_mode === 'gesture_only') {
+    updates.block_touchpad = true;
+  }
+
   try {
-    await fetch('/api/settings', {
+    const res = await fetch('/api/settings', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(updates)
     });
-    Object.assign(appState.config, updates);
+    const data = await res.json();
+    if (data && data.config) {
+      Object.assign(appState.config, data.config);
+    } else {
+      Object.assign(appState.config, updates);
+    }
     applyControllerConfig(appState.config);
     showToast('Settings saved!');
     closeSettings();
