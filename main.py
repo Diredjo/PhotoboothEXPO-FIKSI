@@ -242,19 +242,46 @@ SHOW_LANDMARKS = False        # Overlay hand landmarks
 SHOW_BOUNDING_BOX = False     # Overlay primary user face box
 SHOW_GESTURE_LABEL = False    # Show recognized gesture text on camera preview
 
-# Frame dimensions (matching standard kiosk format)
-FRAME_WIDTH = 1623
-FRAME_HEIGHT = 3557
+# Frame dimensions (matching standard kiosk format, 3246x7114 @ 300DPI 2x)
+FRAME_WIDTH = 3246
+FRAME_HEIGHT = 7114
 
 # Frame slot definitions
 FRAME_PRESETS = {
     "default_3slot": {
-        "width": 1623,
-        "height": 3557,
+        "width": 3246,
+        "height": 7114,
         "slots": [
-            {"x": 132, "y": 300,  "w": 1359, "h": 785},  # Top Slot
-            {"x": 132, "y": 1212, "w": 1359, "h": 785},  # Middle Slot
-            {"x": 132, "y": 2128, "w": 1359, "h": 780},  # Bottom Slot
+            {"x": 258, "y": 594,  "w": 2730, "h": 1582},  # Slot 1
+            {"x": 258, "y": 2418, "w": 2730, "h": 1582},  # Slot 2
+            {"x": 258, "y": 4252, "w": 2730, "h": 1582},  # Slot 3
+        ]
+    },
+    "Opsi 1.png": {
+        "width": 3246,
+        "height": 7114,
+        "slots": [
+            {"x": 258, "y": 594,  "w": 2730, "h": 1582},  # Slot 1
+            {"x": 258, "y": 2418, "w": 2730, "h": 1582},  # Slot 2
+            {"x": 258, "y": 4252, "w": 2730, "h": 1582},  # Slot 3
+        ]
+    },
+    "Opsi 2.png": {
+        "width": 3246,
+        "height": 7114,
+        "slots": [
+            {"x": 268, "y": 595,  "w": 2712, "h": 1558},  # Slot 1
+            {"x": 268, "y": 2441, "w": 2712, "h": 1558},  # Slot 2
+            {"x": 268, "y": 4275, "w": 2712, "h": 1558},  # Slot 3
+        ]
+    },
+    "Opsi 3.png": {
+        "width": 3246,
+        "height": 7114,
+        "slots": [
+            {"x": 310, "y": 616,  "w": 2626, "h": 1520},  # Slot 1
+            {"x": 310, "y": 2450, "w": 2626, "h": 1506},  # Slot 2
+            {"x": 310, "y": 4270, "w": 2626, "h": 1542},  # Slot 3
         ]
     },
     "FramePhotoBooth1.png": {
@@ -2097,6 +2124,34 @@ class FrameManager:
     def get_frame(self, filename: str) -> Optional[Dict]:
         return self.frames.get(filename)
 
+    def _auto_detect_slots(self, img_path: str) -> Optional[Dict]:
+        """Dynamically detect 3 photo slot bounding boxes from alpha channel transparency."""
+        try:
+            with Image.open(img_path) as img:
+                if img.mode != "RGBA" and "A" not in img.mode:
+                    return None
+                w, h = img.size
+                arr = np.array(img)
+                alpha = arr[:, :, 3]
+                mask = (alpha < 128).astype(np.uint8) * 255
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                boxes = []
+                for c in contours:
+                    bx, by, bw, bh = cv2.boundingRect(c)
+                    if bw * bh > 50000:
+                        pad = 6
+                        bx_pad = max(0, bx - pad)
+                        by_pad = max(0, by - pad)
+                        bw_pad = min(w - bx_pad, bw + 2 * pad)
+                        bh_pad = min(h - by_pad, bh + 2 * pad)
+                        boxes.append({"x": bx_pad, "y": by_pad, "w": bw_pad, "h": bh_pad})
+                if len(boxes) >= 3:
+                    boxes.sort(key=lambda b: b["y"])
+                    return {"width": w, "height": h, "slots": boxes[:3]}
+        except Exception as e:
+            print(f"[FRAME] Slot detection error for {img_path}: {e}")
+        return None
+
     def get_preset_for_frame(self, filename: str) -> Dict:
         """Returns the layout preset (dimensions + slots) for a given frame."""
         if filename in FRAME_PRESETS:
@@ -2105,6 +2160,17 @@ class FrameManager:
         base = os.path.basename(filename)
         if base in FRAME_PRESETS:
             return FRAME_PRESETS[base]
+        # Auto-detect slots from alpha channel if not explicitly preset
+        frame_info = self.get_frame(filename)
+        if frame_info and os.path.exists(frame_info.get("path", "")):
+            try:
+                auto_preset = self._auto_detect_slots(frame_info["path"])
+                if auto_preset:
+                    FRAME_PRESETS[filename] = auto_preset
+                    print(f"[FRAME PRESET] Auto-detected slots for {filename}: {auto_preset['slots']}")
+                    return auto_preset
+            except Exception as e:
+                print(f"[FRAME PRESET] Auto-detect failed for {filename}: {e}")
         return self.preset
 
     def composite(self, frame_filename: str, photo_paths: List[str]) -> Optional[str]:
@@ -9081,7 +9147,8 @@ def ensure_directories():
     ASSETS_DIR.mkdir(exist_ok=True)
     dummy_src = BASE_DIR / "dummyframe.png"
     dummy_dst = FRAMES_DIR / "dummyframe.png"
-    if dummy_src.exists() and not dummy_dst.exists():
+    existing_pngs = [f for f in FRAMES_DIR.glob("*.png") if f.name != "dummyframe.png"]
+    if len(existing_pngs) == 0 and dummy_src.exists() and not dummy_dst.exists():
         shutil.copy2(str(dummy_src), str(dummy_dst))
         print("[FRAME] Copied dummyframe.png to frames/")
     qris_path = ASSETS_DIR / "qris.png"
