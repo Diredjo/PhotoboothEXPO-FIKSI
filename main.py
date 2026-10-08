@@ -484,7 +484,7 @@ session_lock = threading.RLock()
 # ============================================================
 class GestureState:
     def __init__(self):
-        self.current_gesture = "none"  # none, unknown, palm, fist, peace
+        self.current_gesture = "none"  # none, unknown, thumbs_up, thumbs_down, peace
         self.cursor_x = 0.5
         self.cursor_y = 0.5
         self.cursor_raw_x = 0.5
@@ -1432,18 +1432,18 @@ class GestureEngine:
             gesture_state.recent_gestures.append(raw_gesture)
 
             # Majority filter (3 of last 5 frames) to absorb momentary sensor noise
-            fist_count = sum(1 for g in gesture_state.recent_gestures if g == "fist")
+            thumbs_up_count = sum(1 for g in gesture_state.recent_gestures if g == "thumbs_up")
+            thumbs_down_count = sum(1 for g in gesture_state.recent_gestures if g == "thumbs_down")
             peace_count = sum(1 for g in gesture_state.recent_gestures if g == "peace")
-            palm_count = sum(1 for g in gesture_state.recent_gestures if g == "palm")
 
-            if fist_count >= 3:
-                effective_gesture = "fist"
+            if thumbs_up_count >= 3:
+                effective_gesture = "thumbs_up"
+            elif thumbs_down_count >= 3:
+                effective_gesture = "thumbs_down"
             elif peace_count >= 3:
                 effective_gesture = "peace"
-            elif palm_count >= 3:
-                effective_gesture = "palm"
             else:
-                effective_gesture = raw_gesture
+                effective_gesture = "none" if raw_gesture == "unknown" else raw_gesture
 
             gesture_state.current_gesture = effective_gesture
 
@@ -1460,14 +1460,8 @@ class GestureEngine:
                     gesture_state.peace_start = None
                     gesture_state.peace_progress = 0.0
 
-            # Fist timing with 180ms drop debounce
-            if effective_gesture == "fist":
-                if gesture_state.fist_start is None:
-                    gesture_state.fist_start = now
-                gesture_state.last_fist_seen = now
-            else:
-                if now - gesture_state.last_fist_seen > 0.18:
-                    gesture_state.fist_start = None
+            # Legacy fist timing compatibility
+            gesture_state.fist_start = None
 
     def _associate_hand_with_primary(self, hand_result):
         """
@@ -1617,13 +1611,40 @@ class GestureEngine:
             if d_index_middle > 0.035:
                 return "peace"
 
-        # FIST: At least 3 fingers are folded AND 0 fingers are extended
-        if num_fld >= 3 and num_ext == 0:
-            return "fist"
+        # Check Thumb extension and orientation for THUMBS UP / THUMBS DOWN
+        # Thumb landmarks: 1=CMC, 2=MCP, 3=IP, 4=TIP
+        thumb_tip = landmarks[4]
+        thumb_ip = landmarks[3]
+        thumb_mcp = landmarks[2]
 
-        # PALM: At least 3 fingers extended
-        if num_ext >= 3:
-            return "palm"
+        palm_size = max(0.04, dist_3d(wrist, landmarks[9]))
+        d_thumb_tip_mcp = dist_3d(thumb_tip, thumb_mcp)
+        d_thumb_ip_mcp = max(dist_3d(thumb_ip, thumb_mcp), 0.01)
+        d_thumb_index_mcp = dist_3d(thumb_tip, landmarks[5])
+
+        # Thumb is extended away if tip is farther from MCP than IP,
+        # and tip is well separated from index knuckle (not tucked into a fist)
+        thumb_extended = (
+            (d_thumb_tip_mcp > 1.20 * d_thumb_ip_mcp) and
+            (dist_3d(thumb_tip, wrist) > 1.15 * dist_3d(thumb_ip, wrist)) and
+            (d_thumb_index_mcp > 0.60 * palm_size)
+        )
+
+        # For Thumbs Up / Down: all 4 other fingers must be curled/folded (num_fld >= 3, num_ext == 0)
+        if num_fld >= 3 and num_ext == 0 and thumb_extended:
+            dy_thumb = thumb_tip.y - thumb_mcp.y
+            dx_thumb = thumb_tip.x - thumb_mcp.x
+
+            # Vertical orientation dominance: abs(dy) should dominate or be comparable to abs(dx)
+            is_vertical = abs(dy_thumb) > abs(dx_thumb) * 0.40
+
+            # THUMBS UP: tip is significantly above MCP and IP (y is smaller towards top of frame)
+            if is_vertical and dy_thumb < -0.035 and thumb_tip.y < thumb_ip.y and thumb_tip.y < landmarks[5].y:
+                return "thumbs_up"
+
+            # THUMBS DOWN: tip is significantly below MCP and IP (y is larger towards bottom of frame)
+            if is_vertical and dy_thumb > 0.035 and thumb_tip.y > thumb_ip.y:
+                return "thumbs_down"
 
         return "unknown"
 
@@ -4892,6 +4913,20 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   margin-top: 4px;
 }
 
+.btn-gesture-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: var(--r-full);
+  padding: 2px 8px;
+  font-size: 13px;
+  line-height: 1;
+  margin-left: 6px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+}
+
 .btn-print-cta {
   padding: 16px 40px;
   font-size: var(--text-base);
@@ -5038,89 +5073,92 @@ body.gesture-control .frame-card:hover:not(.hovered) {
   transform: scale(1.04);
 }
 
-/* VIRTUAL CURSOR */
+/* VIRTUAL CURSOR DISABLED */
 #cursor {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* GESTURE ACTION FEEDBACK OVERLAY (TOAST / BADGE) */
+#gesture-action-overlay {
   position: fixed;
-  width: 52px; height: 52px;
-  margin-left: -26px; margin-top: -26px;
-  border-radius: 50%;
-  background: rgba(253, 192, 15, 0.25);
-  border: 2.5px solid var(--col-yellow);
-  box-shadow: 0 0 24px rgba(253,192,15,0.8), 0 0 8px rgba(253,192,15,0.5);
+  top: 32px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-24px) scale(0.92);
+  z-index: 10000;
   pointer-events: none;
-  z-index: 9999;
-  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease, transform 100ms ease;
   opacity: 0;
-  will-change: left, top;
+  transition: opacity 180ms cubic-bezier(0.16, 1, 0.3, 1), transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-/* SVG Charging Ring for Fist & Peace */
-.cursor-ring-svg {
-  position: absolute;
-  inset: -3px;
-  width: calc(100% + 6px);
-  height: calc(100% + 6px);
-  transform: rotate(-90deg);
-  pointer-events: none;
-}
-.cursor-ring-bg {
-  fill: none;
-  stroke: rgba(255, 255, 255, 0.15);
-  stroke-width: 3.5;
-}
-.cursor-ring-fg {
-  fill: none;
-  stroke: var(--col-yellow);
-  stroke-width: 4;
-  stroke-dasharray: 138.23;
-  stroke-dashoffset: 138.23;
-  stroke-linecap: round;
-  transition: stroke-dashoffset 40ms linear, stroke 150ms ease;
+#gesture-action-overlay.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0) scale(1);
 }
 
-/* Center dot */
-.cursor-center-dot {
-  position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  width: 8px; height: 8px;
-  background: var(--col-yellow);
-  border-radius: 50%;
-  box-shadow: 0 0 6px rgba(253,192,15,1);
-  transition: background 150ms ease;
+.gao-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(14, 18, 28, 0.92);
+  border: 2px solid var(--col-yellow);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  padding: 14px 30px;
+  border-radius: var(--r-full);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 24px rgba(253, 192, 15, 0.35);
 }
 
-#cursor.fist {
-  background: rgba(88, 78, 184, 0.45);
-  border-color: #A78BFA;
-  box-shadow: 0 0 28px rgba(88,78,184,0.9);
-  transform: scale(0.85);
-}
-#cursor.fist .cursor-ring-fg {
-  stroke: #A78BFA;
-}
-#cursor.fist .cursor-center-dot {
-  background: #fff;
-  box-shadow: 0 0 8px rgba(255,255,255,1);
-}
-
-#cursor.fist-clicked {
-  transform: scale(1.32) !important;
-  box-shadow: 0 0 40px rgba(88,78,184,1), 0 0 15px #fff !important;
-  background: rgba(88, 78, 184, 0.85) !important;
-}
-
-#cursor.peace {
-  background: rgba(34, 197, 94, 0.35);
+.gao-card.type-thumbs_up {
   border-color: #22C55E;
-  box-shadow: 0 0 24px rgba(34,197,94,0.85);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 28px rgba(34, 197, 94, 0.45);
 }
-#cursor.peace .cursor-ring-fg {
-  stroke: #22C55E;
+
+.gao-card.type-thumbs_down {
+  border-color: #EF4444;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 28px rgba(239, 68, 68, 0.45);
 }
-#cursor.peace .cursor-center-dot {
-  background: #22C55E;
-  box-shadow: 0 0 8px rgba(34,197,94,1);
+
+.gao-card.type-peace {
+  border-color: #3B82F6;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 28px rgba(59, 130, 246, 0.45);
+}
+
+.gao-icon {
+  font-size: 36px;
+  line-height: 1;
+  filter: drop-shadow(0 2px 8px rgba(0,0,0,0.4));
+  animation: gaoIconPop 350ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+.gao-text-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gao-label {
+  font-size: 19px;
+  font-weight: 900;
+  letter-spacing: 1.2px;
+  color: #FFFFFF;
+  text-transform: uppercase;
+}
+
+.gao-desc {
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+@keyframes gaoIconPop {
+  0% { transform: scale(0.6); }
+  60% { transform: scale(1.25); }
+  100% { transform: scale(1); }
 }
 
 /* Gesture Debug Overlay (shown when show_gesture_label=true) */
@@ -5298,6 +5336,21 @@ body.dark-mode #gesture-hud {
 .hud-item.active {
   opacity: 1;
   color: var(--col-blue-1);
+}
+
+#gest-thumbs-up.active {
+  color: #22C55E !important;
+  text-shadow: 0 0 10px rgba(34, 197, 94, 0.4);
+}
+
+#gest-thumbs-down.active {
+  color: #EF4444 !important;
+  text-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+}
+
+#gest-peace.active {
+  color: #3B82F6 !important;
+  text-shadow: 0 0 10px rgba(59, 130, 246, 0.4);
 }
 
 .hud-badge {
@@ -6216,16 +6269,16 @@ body.dark-mode .gallery-zoom-card {
 
     <div class="gesture-guide-pill" id="landing-guide-pill">
       <div class="guide-step">
-        <span class="guide-step-icon">✋</span>
-        <span>Open Palm = Move Cursor</span>
+        <span class="guide-step-icon">👍</span>
+        <span>Thumbs Up = NEXT / Lanjut</span>
       </div>
       <div class="guide-step">
-        <span class="guide-step-icon">✊</span>
-        <span>Hold Fist = Select / Click</span>
+        <span class="guide-step-icon">👎</span>
+        <span>Thumbs Down = BACK / Kembali</span>
       </div>
       <div class="guide-step">
         <span class="guide-step-icon">✌️</span>
-        <span>Hold Peace = Snap Photo</span>
+        <span>Peace = OK / Confirm / Capture</span>
       </div>
     </div>
     <div id="landing-ctrl-hint" style="font-size: 11px; color: var(--col-text-3); font-weight: 600; margin-top: -12px;">
@@ -6405,20 +6458,23 @@ body.dark-mode .gallery-zoom-card {
 
     <!-- Action Bar Buttons -->
     <div class="preview-actions">
-      <button class="btn btn-ghost btn-interactive" onclick="doAction('back_to_frames')" title="Kembali ke pemilihan frame">
+      <button class="btn btn-ghost btn-interactive" onclick="doAction('back_to_frames')" title="Kembali ke pemilihan frame (Gestur 👎)">
         <span>🖼️ Ubah Frame</span>
+        <span class="btn-gesture-tag">👎</span>
       </button>
-      <button class="btn btn-secondary btn-interactive" onclick="openDownloadModal()" title="Download foto ke HP lewat QR Code">
+      <button class="btn btn-secondary btn-interactive" onclick="openDownloadModal()" title="Download foto ke HP lewat QR Code (Gestur 👍)">
         <span>📱 Scan QR / Download</span>
+        <span class="btn-gesture-tag">👍</span>
       </button>
-      <button class="btn btn-primary btn-interactive btn-print-cta" onclick="doAction('print_photo')" title="Cetak langsung ke printer EPSON A4 (Tinggi 12cm)">
+      <button class="btn btn-primary btn-interactive btn-print-cta" onclick="doAction('print_photo')" title="Cetak langsung ke printer EPSON A4 (Gestur ✌️)">
         <span style="font-size: 20px;">🖨️</span>
         <span>Cetak Sekarang (Print 12cm)</span>
+        <span class="btn-gesture-tag">✌️</span>
       </button>
     </div>
 
     <div class="preview-hint">
-      Arahkan kursor & kepalkan tangan (✊) atau tahan pose Peace (✌️) untuk memilih
+      Gunakan gestur: 👎 <b>Ubah Frame</b> • 👍 <b>Scan QR / Download</b> • ✌️ <b>Cetak Sekarang</b>
     </div>
 
     <!-- Quick Download Modal -->
@@ -6443,6 +6499,9 @@ body.dark-mode .gallery-zoom-card {
         <button class="btn btn-primary btn-interactive" onclick="closeDownloadModal()" style="margin-top: 6px; padding: 12px 28px;">
           Tutup & Kembali ke Preview
         </button>
+        <div style="font-size: var(--text-xs); color: var(--col-text-3); font-weight: 600; text-align: center; margin-top: 6px;">
+          Kontrol Gestur: 👎 Tutup • ✌️ Cetak Foto • 👍 Selesai
+        </div>
       </div>
     </div>
   </div>
@@ -6460,9 +6519,9 @@ body.dark-mode .gallery-zoom-card {
         ✨ Direct Download Ready (Auto-download on scan)
       </div>
       <div style="display: flex; gap: 16px; margin-top: 12px; flex-wrap: wrap; justify-content: center;">
-        <button class="btn btn-ghost btn-interactive" onclick="doAction('back_to_preview')">← Preview Cetak</button>
-        <button class="btn btn-secondary btn-interactive" onclick="doAction('print_photo')">🖨 Print Photo</button>
-        <button class="btn btn-primary btn-interactive" onclick="doAction('go_success')">Done ✓</button>
+        <button class="btn btn-ghost btn-interactive" onclick="doAction('back_to_preview')">← Preview Cetak <span class="btn-gesture-tag">👎</span></button>
+        <button class="btn btn-secondary btn-interactive" onclick="doAction('print_photo')">🖨 Print Photo <span class="btn-gesture-tag">✌️</span></button>
+        <button class="btn btn-primary btn-interactive" onclick="doAction('go_success')">Done ✓ <span class="btn-gesture-tag">👍</span></button>
       </div>
     </div>
   </div>
@@ -6492,7 +6551,7 @@ body.dark-mode .gallery-zoom-card {
         <span>→</span>
       </button>
       <div style="font-size: var(--text-xs); color: var(--col-text-3); font-weight: 600;">
-        Arahkan kursor & kepalkan tangan (✊) atau tahan pose Peace (✌️)
+        Gunakan gestur 👍 atau ✌️ untuk kembali ke Home
       </div>
     </div>
   </div>
@@ -6512,13 +6571,15 @@ body.dark-mode .gallery-zoom-card {
   </div>
 </div>
 
-<!-- Virtual Cursor -->
-<div id="cursor">
-  <svg class="cursor-ring-svg" viewBox="0 0 52 52">
-    <circle class="cursor-ring-bg" cx="26" cy="26" r="22"></circle>
-    <circle class="cursor-ring-fg" id="cursor-progress-fill" cx="26" cy="26" r="22"></circle>
-  </svg>
-  <div class="cursor-center-dot"></div>
+<!-- Gesture Action Feedback Overlay (Replaces Virtual Cursor) -->
+<div id="gesture-action-overlay">
+  <div class="gao-card" id="gao-card">
+    <span class="gao-icon" id="gao-icon">👍</span>
+    <div class="gao-text-wrap">
+      <span class="gao-label" id="gao-label">NEXT</span>
+      <span class="gao-desc" id="gao-desc">Lanjut ke langkah berikutnya</span>
+    </div>
+  </div>
 </div>
 
 <!-- Flash overlay -->
@@ -6540,9 +6601,9 @@ body.dark-mode .gallery-zoom-card {
   <div class="hud-item hud-badge" id="hud-ctrl-mode" title="Mode Controller Aktif">🎮 <span id="hud-ctrl-text">FULL GESTURE</span></div>
   <div class="hud-divider"></div>
   <div class="hud-item" id="gest-hand" title="Hand Detected">👋<span id="gest-hand-txt">NO HAND</span></div>
-  <div class="hud-item" id="gest-palm">✋<span>PALM</span></div>
-  <div class="hud-item" id="gest-fist">✊<span>FIST</span></div>
-  <div class="hud-item" id="gest-peace">✌️<span>PEACE</span></div>
+  <div class="hud-item" id="gest-thumbs-up" title="Next / Lanjut">👍<span>NEXT</span></div>
+  <div class="hud-item" id="gest-thumbs-down" title="Back / Kembali">👎<span>BACK</span></div>
+  <div class="hud-item" id="gest-peace" title="Confirm / Capture">✌️<span>OK / SNAP</span></div>
 </div>
 
 <!-- Toast -->
@@ -6627,24 +6688,24 @@ body.dark-mode .gallery-zoom-card {
             <div class="settings-group-title">Daftar Kontrol Gestur Tangan</div>
             <div style="display: flex; flex-direction: column; gap: 8px;">
               <div class="gesture-guide-card">
-                <span style="font-size: 24px;">✋</span>
+                <span style="font-size: 24px;">👍</span>
                 <div>
-                  <strong style="font-size: 13px;">Telapak Tangan Terbuka (Open Palm)</strong>
-                  <div class="settings-hint">Menggerakkan kursor virtual di layar. Arahkan ke tombol yang ingin dipilih.</div>
+                  <strong style="font-size: 13px;">Jempol ke Atas (Thumbs Up) — NEXT</strong>
+                  <div class="settings-hint">Lanjut ke langkah berikutnya atau pilih frame berikutnya.</div>
                 </div>
               </div>
               <div class="gesture-guide-card">
-                <span style="font-size: 24px;">✊</span>
+                <span style="font-size: 24px;">👎</span>
                 <div>
-                  <strong style="font-size: 13px;">Kepalan Tangan (Hold Fist 350ms)</strong>
-                  <div class="settings-hint">Tahan kepalan tangan untuk mengisi ring dan mengeklik tombol yang diarahkan.</div>
+                  <strong style="font-size: 13px;">Jempol ke Bawah (Thumbs Down) — BACK</strong>
+                  <div class="settings-hint">Kembali ke langkah sebelumnya atau batalkan / ulang foto.</div>
                 </div>
               </div>
               <div class="gesture-guide-card">
                 <span style="font-size: 24px;">✌️</span>
                 <div>
-                  <strong style="font-size: 13px;">Pose Dua Jari (Peace Sign 1.2s)</strong>
-                  <div class="settings-hint">Tahan pose peace untuk memulai countdown foto 3 detik atau konfirmasi layar.</div>
+                  <strong style="font-size: 13px;">Pose Dua Jari (Peace Sign) — OK / CAPTURE</strong>
+                  <div class="settings-hint">Mulai countdown foto 3 detik, konfirmasi pilihan frame, atau cetak foto.</div>
                 </div>
               </div>
             </div>
@@ -8017,23 +8078,29 @@ async function doAction(action, extra = {}) {
 function retryCamera() { doAction('retry_camera'); }
 
 // ============================================================
-// GESTURE PROCESSING PIPELINE
+// 3-GESTURE ACTION CONTROLLER PIPELINE
+// 👍 THUMBS UP   = NEXT / Lanjut / Pilih Frame
+// 👎 THUMBS DOWN = BACK / Kembali / Retake
+// ✌️ PEACE       = OK / Confirm / Capture Foto
 // ============================================================
-// Explicit fist state machine: 'ARMED', 'PRESSING', 'TRIGGERED', 'WAIT_RELEASE'
-let fistState = 'ARMED';
-let fistPressStart = 0;
-let lastFistSeenTime = 0;
-let lastFistClickTime = 0;
 
-// Explicit peace state machine: 'NONE', 'HOLDING', 'TRIGGERED', 'WAIT_RELEASE'
-let peaceState = 'NONE';
-let peaceHoldStart = 0;
+// Debouncing & Anti-False Detection State Machine
+let candidateGesture = 'none';
+let candidateConsecutiveCount = 0;
+let gestureLocked = false;
+let neutralConsecutiveCount = 0;
+let lastGestureActionTime = 0;
+let gestureActionOverlayTimer = null;
+
+const STABLE_FRAMES_REQUIRED = 4;   // Sustained recognition (~200ms) required before trigger
+const RELEASE_FRAMES_REQUIRED = 3;  // Neutral hand return (~150ms) required to re-arm
+const GESTURE_COOLDOWN_MS = 650;    // Minimum refractory time between any two actions
 
 function resetGestureLatches() {
-  fistState = 'ARMED';
-  peaceState = 'NONE';
-  fistPressStart = 0;
-  peaceHoldStart = 0;
+  candidateGesture = 'none';
+  candidateConsecutiveCount = 0;
+  gestureLocked = false;
+  neutralConsecutiveCount = 0;
   clearGestureUI();
 }
 
@@ -8044,33 +8111,65 @@ function updateGestureHUD() {
   if (handEl) handEl.classList.toggle('active', !!appState.handDetected);
   if (handTxt) handTxt.textContent = appState.handDetected ? 'HAND READY' : 'NO HAND';
 
-  document.getElementById('gest-palm')?.classList.toggle('active', g === 'palm');
-  document.getElementById('gest-fist')?.classList.toggle('active', g === 'fist');
-  document.getElementById('gest-peace')?.classList.toggle('active', g === 'peace');
+  const isUp = (g === 'thumbs_up');
+  const isDown = (g === 'thumbs_down');
+  const isPeace = (g === 'peace');
 
-  // Update floating mini camera feedback so user always knows gesture status
+  document.getElementById('gest-thumbs-up')?.classList.toggle('active', isUp);
+  document.getElementById('gest-thumbs-down')?.classList.toggle('active', isDown);
+  document.getElementById('gest-peace')?.classList.toggle('active', isPeace);
+
+  // Update floating mini camera feedback
   const miniCam = document.getElementById('mini-camera-preview');
   if (miniCam) {
     const isDetected = !!appState.handDetected;
-    const isAction = (g === 'fist' || g === 'peace');
+    const isAction = (isUp || isDown || isPeace);
     miniCam.classList.toggle('hand-detected', isDetected && !isAction);
     miniCam.classList.toggle('gesture-action', isAction);
   }
 }
 
-function updateCursorProgress(progress, isFist = true) {
-  const ring = document.getElementById('cursor-progress-fill');
-  if (!ring) return;
-  const maxDash = 138.23;
-  if (progress <= 0) {
-    ring.style.strokeDashoffset = maxDash;
-  } else {
-    ring.style.strokeDashoffset = maxDash * (1 - Math.min(1.0, progress));
+function clearGestureUI() {
+  document.getElementById('gest-thumbs-up')?.classList.remove('active');
+  document.getElementById('gest-thumbs-down')?.classList.remove('active');
+  document.getElementById('gest-peace')?.classList.remove('active');
+}
+
+function showGestureFeedback(gesture, title, desc) {
+  const overlay = document.getElementById('gesture-action-overlay');
+  const card = document.getElementById('gao-card');
+  const icon = document.getElementById('gao-icon');
+  const label = document.getElementById('gao-label');
+  const descEl = document.getElementById('gao-desc');
+  if (!overlay || !card) return;
+
+  if (gestureActionOverlayTimer) {
+    clearTimeout(gestureActionOverlayTimer);
+    gestureActionOverlayTimer = null;
   }
+
+  card.className = 'gao-card type-' + gesture;
+  if (gesture === 'thumbs_up') {
+    icon.textContent = '👍';
+  } else if (gesture === 'thumbs_down') {
+    icon.textContent = '👎';
+  } else if (gesture === 'peace') {
+    icon.textContent = '✌️';
+  }
+
+  if (label) label.textContent = title;
+  if (descEl) descEl.textContent = desc;
+
+  overlay.classList.add('visible');
+
+  gestureActionOverlayTimer = setTimeout(() => {
+    overlay.classList.remove('visible');
+    gestureActionOverlayTimer = null;
+  }, 1100);
 }
 
 function processGestures(cfg) {
-  // If in touchpad_only mode, disable gesture recognition actions completely
+  // If in touchpad_only mode, gesture recognition actions are disabled
   if (cfg && cfg.controller_mode === 'touchpad_only') {
     resetGestureLatches();
     clearGestureUI();
@@ -8080,190 +8179,242 @@ function processGestures(cfg) {
   // If settings modal is open (admin mode), disable booth gesture actions
   if (appState.adminMode || settingsOpen) {
     resetGestureLatches();
+    clearGestureUI();
     return;
   }
 
   if (!appState.handDetected || !appState.cameraOk) {
-    resetGestureLatches();
+    neutralConsecutiveCount++;
+    candidateConsecutiveCount = 0;
+    candidateGesture = 'none';
+    if (gestureLocked && neutralConsecutiveCount >= RELEASE_FRAMES_REQUIRED) {
+      gestureLocked = false;
+    }
+    clearGestureUI();
     return;
   }
 
-  const g = appState.gesture;
-  const clickThresh = cfg.click_threshold_ms || 350;
-  const cooldown = cfg.click_cooldown_ms || 700;
-  const now = Date.now();
-
-  // Update HUD
+  const rawG = appState.gesture; // 'thumbs_up', 'thumbs_down', 'peace', 'none', 'unknown'
   updateGestureHUD();
 
-  // Peace progress ring
-  const ringOverlay = document.getElementById('peace-ring-overlay');
-  const ringFill = document.getElementById('peace-ring-fill');
-  if (g === 'peace' && appState.peaceProgress > 0) {
-    ringOverlay.classList.add('visible');
-    const offset = 376 * (1 - Math.min(1.0, appState.peaceProgress));
-    ringFill.style.strokeDashoffset = offset;
-    updateCursorProgress(appState.peaceProgress, false);
-  } else {
-    ringOverlay.classList.remove('visible');
-    ringFill.style.strokeDashoffset = 376;
-    if (g !== 'fist') updateCursorProgress(0.0);
+  // Handle neutral / unclassified hands
+  if (!rawG || rawG === 'none' || rawG === 'unknown') {
+    neutralConsecutiveCount++;
+    candidateConsecutiveCount = 0;
+    candidateGesture = 'none';
+    if (gestureLocked && neutralConsecutiveCount >= RELEASE_FRAMES_REQUIRED) {
+      gestureLocked = false; // Unlocked! Ready for next gesture action
+    }
+    return;
   }
 
-  // Explicit Peace State Machine: NONE -> HOLDING -> TRIGGERED -> WAIT_RELEASE
-  if (g === 'peace') {
-    if (peaceState === 'NONE') {
-      peaceState = 'HOLDING';
-      peaceHoldStart = now;
-    } else if (peaceState === 'HOLDING') {
-      if (appState.peaceProgress >= 1.0) {
-        peaceState = 'TRIGGERED';
-        handlePeaceAction();
-        peaceState = 'WAIT_RELEASE';
-      }
-    }
-    // While in WAIT_RELEASE and user still holds peace sign, do not re-trigger!
-  } else {
-    peaceState = 'NONE';
-  }
+  // User is presenting a valid candidate gesture
+  if (rawG === 'thumbs_up' || rawG === 'thumbs_down' || rawG === 'peace') {
+    neutralConsecutiveCount = 0;
 
-  // Explicit Fist State Machine: ARMED -> PRESSING -> TRIGGERED -> WAIT_RELEASE
-  if (g === 'fist') {
-    lastFistSeenTime = now;
-    if (fistState === 'ARMED') {
-      fistState = 'PRESSING';
-      fistPressStart = now;
-      updateCursorProgress(0.08, true);
-    } else if (fistState === 'PRESSING') {
-      const held = appState.fistStableMs || (now - fistPressStart);
-      const ratio = Math.min(1.0, held / clickThresh);
-      updateCursorProgress(ratio, true);
-      if (held >= clickThresh && (now - lastFistClickTime >= cooldown)) {
-        fistState = 'TRIGGERED';
-        lastFistClickTime = now;
-        updateCursorProgress(1.0, true);
-        handleFistClick();
-        doAction('register_click');
-        fistState = 'WAIT_RELEASE';
-      }
+    // If currently locked after triggering, do not register again until neutral hand is seen
+    if (gestureLocked) {
+      return;
     }
-    // While in WAIT_RELEASE and user still holds fist, do not re-trigger!
-  } else {
-    // Fist released with 180ms grace period to tolerate momentary dropped polling frames
-    if (now - lastFistSeenTime > 180) {
-      if (fistState === 'WAIT_RELEASE' || fistState === 'TRIGGERED') {
-        if (now - lastFistClickTime >= cooldown) {
-          fistState = 'ARMED';
-          updateCursorProgress(0.0, true);
-        }
-      } else {
-        fistState = 'ARMED';
-        updateCursorProgress(0.0, true);
+
+    if (rawG === candidateGesture) {
+      candidateConsecutiveCount++;
+    } else {
+      candidateGesture = rawG;
+      candidateConsecutiveCount = 1;
+    }
+
+    // Must be stable for N consecutive frames
+    if (candidateConsecutiveCount >= STABLE_FRAMES_REQUIRED) {
+      const now = Date.now();
+      if (now - lastGestureActionTime >= GESTURE_COOLDOWN_MS) {
+        lastGestureActionTime = now;
+        gestureLocked = true; // LOCK immediately! Strictly 1 action per gesture cycle
+        candidateConsecutiveCount = 0;
+
+        // Dispatch action
+        triggerGestureAction(candidateGesture);
       }
     }
   }
 }
 
-function clearGestureUI() {
-  const palm = document.getElementById('gest-palm');
-  if (palm) palm.classList.remove('active');
-  const fist = document.getElementById('gest-fist');
-  if (fist) fist.classList.remove('active');
-  const peace = document.getElementById('gest-peace');
-  if (peace) peace.classList.remove('active');
-  const ring = document.getElementById('peace-ring-overlay');
-  if (ring) ring.classList.remove('visible');
-  const fill = document.getElementById('peace-ring-fill');
-  if (fill) fill.style.strokeDashoffset = 376;
-  updateCursorProgress(0.0);
+function triggerGestureAction(gesture) {
+  if (gesture === 'thumbs_up') {
+    handleNextGesture();
+  } else if (gesture === 'thumbs_down') {
+    handleBackGesture();
+  } else if (gesture === 'peace') {
+    handleConfirmGesture();
+  }
 }
 
-function handlePeaceAction() {
-  if (appState.screen === 'camera') {
-    if (!countdownRunning) startClientCountdown();
-  } else if (appState.screen === 'review') {
+// ------------------------------------------------------------
+// 👍 THUMBS UP: NEXT / Lanjut / Pilih Frame
+// ------------------------------------------------------------
+function handleNextGesture() {
+  const scr = appState.screen;
+
+  // If photo zoom modal is open
+  const zoomModal = document.getElementById('photo-zoom-modal');
+  if (zoomModal && zoomModal.classList.contains('active')) {
+    showGestureFeedback('thumbs_up', 'RETAKE', 'Mengulang foto yang dipilih');
+    retakeCurrentZoomedPhoto();
+    return;
+  }
+
+  if (scr === 'landing') {
+    showGestureFeedback('thumbs_up', 'MULAI SESI', 'Membuka kamera foto...');
+    doAction('start_camera');
+  } else if (scr === 'camera') {
+    if (countdownRunning) return;
+    showGestureFeedback('thumbs_up', 'AMBIL FOTO', 'Memulai countdown foto...');
+    startClientCountdown();
+  } else if (scr === 'review') {
+    showGestureFeedback('thumbs_up', 'LANJUT', 'Melanjutkan ke pembayaran/frame...');
     doAction('use_photos');
-  } else if (appState.screen === 'frames') {
-    if (appState.selectedFrame) doAction('confirm_frame');
-  } else if (appState.screen === 'preview') {
-    doAction('print_photo');
-  } else if (appState.screen === 'qr') {
+  } else if (scr === 'payment') {
+    showGestureFeedback('thumbs_up', 'KONFIRMASI BAYAR', 'Memverifikasi pembayaran...');
+    simulatePayment();
+  } else if (scr === 'frames') {
+    showGestureFeedback('thumbs_up', 'GANTI FRAME', 'Memilih frame berikutnya...');
+    cycleNextFrame();
+  } else if (scr === 'preview') {
+    const qrModal = document.getElementById('preview-qr-modal');
+    if (qrModal && qrModal.style.display !== 'none') {
+      showGestureFeedback('thumbs_up', 'SELESAI', 'Menyelesaikan sesi foto...');
+      closeDownloadModal();
+      doAction('go_success');
+    } else {
+      showGestureFeedback('thumbs_up', 'SCAN QR / DOWNLOAD', 'Membuka QR Code download HP...');
+      openDownloadModal();
+    }
+  } else if (scr === 'qr') {
+    showGestureFeedback('thumbs_up', 'SELESAI', 'Menyelesaikan sesi foto...');
     doAction('go_success');
-  } else if (appState.screen === 'success') {
+  } else if (scr === 'printing') {
+    showGestureFeedback('thumbs_up', 'SELESAI CETAK', 'Melanjutkan ke halaman terima kasih...');
+    doAction('skip_print');
+  } else if (scr === 'success') {
+    showGestureFeedback('thumbs_up', 'HOME', 'Kembali ke halaman utama...');
     goHome();
   }
 }
 
-function handleFistClick() {
-  const x = appState.cursor.x * window.innerWidth;
-  const y = appState.cursor.y * window.innerHeight;
-  const el = getInteractiveAt(x, y);
-  if (el) {
-    const cursor = document.getElementById('cursor');
-    if (cursor) {
-      cursor.classList.add('fist-clicked');
-      setTimeout(() => cursor.classList.remove('fist-clicked'), 350);
-    }
-    isGestureDispatching = true;
-    try {
-      el.classList.add('hovered', 'gesture-clicked');
-      setTimeout(() => el.classList.remove('gesture-clicked'), 350);
+// ------------------------------------------------------------
+// 👎 THUMBS DOWN: BACK / Kembali / Batal / Retake
+// ------------------------------------------------------------
+function handleBackGesture() {
+  const scr = appState.screen;
 
-      if (typeof el.click === 'function') {
-        el.click();
-      } else {
-        el.dispatchEvent(new MouseEvent('click', {
-          bubbles: true,
-          cancelable: true,
-          view: window,
-          clientX: x,
-          clientY: y
-        }));
-      }
-    } catch(err) {
-      console.error('Gesture click error:', err);
-    } finally {
-      setTimeout(() => {
-        isGestureDispatching = false;
-      }, 100);
-    }
+  // If photo zoom modal is open: close it
+  const zoomModal = document.getElementById('photo-zoom-modal');
+  if (zoomModal && zoomModal.classList.contains('active')) {
+    showGestureFeedback('thumbs_down', 'TUTUP ZOOM', 'Kembali ke review foto');
+    closePhotoZoom();
+    return;
+  }
+
+  // If preview QR modal is open: close it
+  const qrModal = document.getElementById('preview-qr-modal');
+  if (qrModal && qrModal.style.display !== 'none') {
+    showGestureFeedback('thumbs_down', 'TUTUP QR', 'Kembali ke preview cetak');
+    closeDownloadModal();
+    return;
+  }
+
+  if (scr === 'landing') {
+    showGestureFeedback('thumbs_down', 'HALAMAN AWAL', 'Anda sudah di halaman utama');
+  } else if (scr === 'camera') {
+    showGestureFeedback('thumbs_down', 'BATAL', 'Kembali ke halaman awal...');
+    doAction('reset');
+  } else if (scr === 'review') {
+    showGestureFeedback('thumbs_down', 'RETAKE ALL', 'Mengulang semua foto...');
+    doAction('retake_all');
+  } else if (scr === 'payment') {
+    showGestureFeedback('thumbs_down', 'KEMBALI', 'Kembali ke review foto...');
+    doAction('back_to_review');
+  } else if (scr === 'frames') {
+    showGestureFeedback('thumbs_down', 'KEMBALI', 'Kembali ke review foto...');
+    doAction('back_to_review');
+  } else if (scr === 'preview') {
+    showGestureFeedback('thumbs_down', 'UBAH FRAME', 'Kembali ke pemilihan frame...');
+    doAction('back_to_frames');
+  } else if (scr === 'qr') {
+    showGestureFeedback('thumbs_down', 'KEMBALI', 'Kembali ke preview cetak...');
+    doAction('back_to_preview');
+  } else if (scr === 'printing') {
+    showGestureFeedback('thumbs_down', 'BATAL CETAK', 'Membatalkan proses cetak...');
+    doAction('back_from_print');
+  } else if (scr === 'success') {
+    showGestureFeedback('thumbs_down', 'HOME', 'Kembali ke halaman utama...');
+    goHome();
   }
 }
 
-function getInteractiveAt(x, y) {
-  // 1. Direct hit check via elementFromPoint
-  const hit = document.elementFromPoint(x, y);
-  if (hit) {
-    const target = hit.closest('button, a, .btn, .btn-interactive, .frame-card, .landing-cta-btn, .review-card, .camera-shutter-btn, [onclick]');
-    if (target && !target.disabled) {
-      if (target.closest('.screen.active') || target.closest('#photo-zoom-modal.active')) {
-        return target;
-      }
-    }
+// ------------------------------------------------------------
+// ✌️ PEACE: OK / Confirm / Capture Foto
+// ------------------------------------------------------------
+function handleConfirmGesture() {
+  const scr = appState.screen;
+
+  // If photo zoom modal is open
+  const zoomModal = document.getElementById('photo-zoom-modal');
+  if (zoomModal && zoomModal.classList.contains('active')) {
+    showGestureFeedback('peace', 'RETAKE FOTO', 'Mengulang foto ini...');
+    retakeCurrentZoomedPhoto();
+    return;
   }
 
-  // 2. Proximity search: find closest interactive element within 28px padding
-  const candidates = document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn, .review-card, .camera-shutter-btn, button, [onclick]');
-  let best = null;
-  let bestDist = Infinity;
-  const pad = 28;
-
-  for (const el of candidates) {
-    if (el.disabled) continue;
-    if (!el.closest('.screen.active') && !el.closest('#photo-zoom-modal.active')) continue;
-    const rect = el.getBoundingClientRect();
-    if (x >= rect.left - pad && x <= rect.right + pad &&
-        y >= rect.top - pad && y <= rect.bottom + pad) {
-      const cx = (rect.left + rect.right) / 2;
-      const cy = (rect.top + rect.bottom) / 2;
-      const dist = Math.hypot(x - cx, y - cy);
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = el;
-      }
-    }
+  // If preview QR modal is open
+  const qrModal = document.getElementById('preview-qr-modal');
+  if (qrModal && qrModal.style.display !== 'none') {
+    showGestureFeedback('peace', 'CETAK SEKARANG', 'Mencetak foto 12cm...');
+    closeDownloadModal();
+    doAction('print_photo');
+    return;
   }
-  return best;
+
+  if (scr === 'landing') {
+    showGestureFeedback('peace', 'START', 'Membuka kamera foto...');
+    doAction('start_camera');
+  } else if (scr === 'camera') {
+    if (countdownRunning) return;
+    showGestureFeedback('peace', 'CAPTURE ✌️', 'Memulai countdown foto...');
+    startClientCountdown();
+  } else if (scr === 'review') {
+    showGestureFeedback('peace', 'KONFIRMASI FOTO', 'Melanjutkan sesi...');
+    doAction('use_photos');
+  } else if (scr === 'payment') {
+    showGestureFeedback('peace', 'KONFIRMASI BAYAR', 'Memverifikasi pembayaran...');
+    simulatePayment();
+  } else if (scr === 'frames') {
+    if (appState.selectedFrame) {
+      showGestureFeedback('peace', 'PILIH FRAME', 'Menyusun hasil foto...');
+      doAction('confirm_frame');
+    }
+  } else if (scr === 'preview') {
+    showGestureFeedback('peace', 'CETAK SEKARANG', 'Mencetak foto 12cm...');
+    doAction('print_photo');
+  } else if (scr === 'qr') {
+    showGestureFeedback('peace', 'CETAK FOTO', 'Mencetak foto 12cm...');
+    doAction('print_photo');
+  } else if (scr === 'printing') {
+    showGestureFeedback('peace', 'SELESAI', 'Melanjutkan sesi...');
+    doAction('skip_print');
+  } else if (scr === 'success') {
+    showGestureFeedback('peace', 'HOME', 'Kembali ke halaman utama...');
+    goHome();
+  }
+}
+
+function cycleNextFrame() {
+  if (!appState.frames || appState.frames.length === 0) return;
+  const currentIndex = appState.frames.findIndex(f => f.filename === appState.selectedFrame);
+  const nextIndex = (currentIndex + 1) % appState.frames.length;
+  const nextFrame = appState.frames[nextIndex];
+  selectFrame(nextFrame.filename);
+  showToast(`Frame dipilih: ${nextFrame.label}`);
 }
 
 // Reconnect camera stream if disconnected or when tab/laptop is refocused
@@ -8340,37 +8491,11 @@ function flashEffect() {
 }
 
 // ============================================================
-// RENDER LOOP — VIRTUAL CURSOR
+// RENDER LOOP
 // ============================================================
 function renderLoop() {
-  const cursor = document.getElementById('cursor');
-  const isTouchpadOnly = (appState.config.controller_mode === 'touchpad_only');
-  if (isTouchpadOnly || !appState.handDetected || appState.adminMode || settingsOpen || !appState.cameraOk) {
-    cursor.style.opacity = '0';
-  } else {
-    cursor.style.opacity = '1';
-    const x = appState.cursor.x * window.innerWidth;
-    const y = appState.cursor.y * window.innerHeight;
-    cursor.style.left = `${x}px`;
-    cursor.style.top = `${y}px`;
-    cursor.className = '';
-    if (appState.gesture === 'fist') cursor.classList.add('fist');
-    else if (appState.gesture === 'peace') cursor.classList.add('peace');
-  }
-
-  // Hover detection synchronized with getInteractiveAt
-  if (!isTouchpadOnly && appState.handDetected && !settingsOpen && !appState.adminMode) {
-    const x = appState.cursor.x * window.innerWidth;
-    const y = appState.cursor.y * window.innerHeight;
-    const activeTarget = getInteractiveAt(x, y);
-    document.querySelectorAll('.btn-interactive, .frame-card, .landing-cta-btn, .review-card, .camera-shutter-btn, button, [onclick]').forEach(el => {
-      const isTarget = (el === activeTarget) && !!(el.closest('.screen.active') || el.closest('#photo-zoom-modal.active'));
-      el.classList.toggle('hovered', isTarget);
-    });
-  } else {
-    document.querySelectorAll('.hovered').forEach(el => el.classList.remove('hovered'));
-  }
-
+  // Virtual cursor removed in favor of direct 3-gesture action state machine.
+  // Physical mouse & touchpad clicks/hover operate natively.
   requestAnimationFrame(renderLoop);
 }
 

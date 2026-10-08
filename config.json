@@ -31,7 +31,7 @@
   "print_width_mm": 297,
   "print_height_mm": 210,
   "print_dpi": 300,
-  "print_strip_height_cm": 12,
+  "print_strip_height_cm": 12.0,
   "print_strip_copies": 1,
   "print_media_type": "glossy",
   "print_quality": "high",
@@ -44,6 +44,6 @@
   "show_gesture_label": false,
   "debug_mode": false,
   "auto_reset_timeout": 120,
-  "controller_mode": "touchpad_only",
+  "controller_mode": "hybrid",
   "block_touchpad": false
 }
