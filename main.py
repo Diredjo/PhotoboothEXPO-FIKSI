@@ -250,11 +250,11 @@ FRAME_HEIGHT = 3557
 FRAME_PRESETS = {
     "default_3slot": {
         "width": 1623,
-        "height": 3556,
+        "height": 3557,
         "slots": [
-            {"x": 40, "y": 36,   "w": 1543, "h": 1060},  # Top
-            {"x": 40, "y": 1248, "w": 1543, "h": 1060},  # Middle
-            {"x": 40, "y": 2460, "w": 1543, "h": 1060},  # Bottom
+            {"x": 132, "y": 300,  "w": 1359, "h": 785},  # Top Slot
+            {"x": 132, "y": 1212, "w": 1359, "h": 785},  # Middle Slot
+            {"x": 132, "y": 2128, "w": 1359, "h": 780},  # Bottom Slot
         ]
     },
     "FramePhotoBooth1.png": {
@@ -262,8 +262,26 @@ FRAME_PRESETS = {
         "height": 3557,
         "slots": [
             {"x": 132, "y": 300,  "w": 1359, "h": 785},  # Top Slot
-            {"x": 132, "y": 1215, "w": 1359, "h": 780},  # Middle Slot
+            {"x": 132, "y": 1212, "w": 1359, "h": 785},  # Middle Slot
             {"x": 132, "y": 2128, "w": 1359, "h": 780},  # Bottom Slot
+        ]
+    },
+    "FramePhotoBooth190.png": {
+        "width": 1623,
+        "height": 3557,
+        "slots": [
+            {"x": 132, "y": 300,  "w": 1359, "h": 785},  # Top Slot
+            {"x": 132, "y": 1212, "w": 1359, "h": 785},  # Middle Slot
+            {"x": 132, "y": 2128, "w": 1359, "h": 780},  # Bottom Slot
+        ]
+    },
+    "dummyframe.png": {
+        "width": 1623,
+        "height": 3556,
+        "slots": [
+            {"x": 55, "y": 55,   "w": 1513, "h": 970},  # Top Slot
+            {"x": 55, "y": 1135, "w": 1513, "h": 970},  # Middle Slot
+            {"x": 55, "y": 2215, "w": 1513, "h": 886},  # Bottom Slot
         ]
     }
 }
@@ -1809,7 +1827,16 @@ class PrinterManager:
         if not os.path.exists(image_path):
             return False, f"File not found: {image_path}"
 
-        target_printer = printer_name or config["printer_name"] or self.get_default_printer()
+        target_printer = printer_name or config.get("printer_name") or self.get_default_printer()
+        available_printers = self.get_printers()
+        if available_printers and target_printer not in available_printers:
+            clean_name = target_printer.split(" (Salin")[0].split(" (Copy")[0].strip()
+            alt = next((p for p in available_printers if clean_name.lower() in p.lower()), None)
+            if alt:
+                print(f"[PRINT] Diverting from '{target_printer}' to installed queue '{alt}'")
+                target_printer = alt
+            else:
+                target_printer = self.get_default_printer()
 
         if self.available and target_printer:
             try:
@@ -1818,74 +1845,81 @@ class PrinterManager:
                 import win32gui
                 from PIL import ImageWin
 
-                img = Image.open(image_path)
-                iw, ih = img.size
+                with Image.open(image_path) as opened_img:
+                    img = opened_img.convert("RGB")
+                    iw, ih = img.size
 
-                # Configure printer DEVMODE for Landscape A4
-                hdc = None
-                try:
-                    hPrinter = win32print.OpenPrinter(target_printer)
+                    # Configure printer DEVMODE for Landscape A4
+                    hdc = None
                     try:
-                        devmode = win32print.GetPrinter(hPrinter, 2)['pDevMode']
-                        devmode.Orientation = win32con.DMORIENT_LANDSCAPE
-                        devmode.PaperSize = win32con.DMPAPER_A4
-                        devmode.Fields = devmode.Fields | win32con.DM_ORIENTATION | win32con.DM_PAPERSIZE
+                        hPrinter = win32print.OpenPrinter(target_printer)
+                        try:
+                            devmode = win32print.GetPrinter(hPrinter, 2)['pDevMode']
+                            devmode.Orientation = win32con.DMORIENT_LANDSCAPE
+                            devmode.PaperSize = win32con.DMPAPER_A4
+                            devmode.Fields = devmode.Fields | win32con.DM_ORIENTATION | win32con.DM_PAPERSIZE
 
-                        # Color mode: Full vibrant color
-                        devmode.Color = win32con.DMCOLOR_COLOR
-                        devmode.Fields = devmode.Fields | win32con.DM_COLOR
+                            # Color mode: Full vibrant color
+                            devmode.Color = win32con.DMCOLOR_COLOR
+                            devmode.Fields = devmode.Fields | win32con.DM_COLOR
 
-                        # Media Type configuration (Photo Paper Glossy for Art Paper / Photo Paper)
-                        m_type = config.get("print_media_type", "glossy")
-                        if m_type == "glossy":
-                            devmode.MediaType = getattr(win32con, "DMMEDIA_GLOSSY", 3)
-                            devmode.Fields = devmode.Fields | win32con.DM_MEDIATYPE
-                        elif m_type == "plain":
-                            devmode.MediaType = getattr(win32con, "DMMEDIA_STANDARD", 1)
-                            devmode.Fields = devmode.Fields | win32con.DM_MEDIATYPE
-                        elif m_type == "matte":
-                            devmode.MediaType = 4  # Standard Matte Paper in Windows DEVMODE
-                            devmode.Fields = devmode.Fields | win32con.DM_MEDIATYPE
+                            # Media Type configuration (Photo Paper Glossy for Art Paper / Photo Paper)
+                            m_type = config.get("print_media_type", "glossy")
+                            if m_type == "glossy":
+                                devmode.MediaType = getattr(win32con, "DMMEDIA_GLOSSY", 3)
+                                devmode.Fields = devmode.Fields | win32con.DM_MEDIATYPE
+                            elif m_type == "plain":
+                                devmode.MediaType = getattr(win32con, "DMMEDIA_STANDARD", 1)
+                                devmode.Fields = devmode.Fields | win32con.DM_MEDIATYPE
+                            elif m_type == "matte":
+                                devmode.MediaType = 4  # Standard Matte Paper in Windows DEVMODE
+                                devmode.Fields = devmode.Fields | win32con.DM_MEDIATYPE
 
-                        # Print Quality configuration
-                        p_qual = config.get("print_quality", "high")
-                        if p_qual == "high":
-                            devmode.PrintQuality = win32con.DMRES_HIGH
-                            devmode.Fields = devmode.Fields | win32con.DM_PRINTQUALITY
-                        elif p_qual == "standard":
-                            devmode.PrintQuality = win32con.DMRES_MEDIUM
-                            devmode.Fields = devmode.Fields | win32con.DM_PRINTQUALITY
+                            # Print Quality configuration
+                            p_qual = config.get("print_quality", "high")
+                            if p_qual == "high":
+                                devmode.PrintQuality = win32con.DMRES_HIGH
+                                devmode.Fields = devmode.Fields | win32con.DM_PRINTQUALITY
+                            elif p_qual == "standard":
+                                devmode.PrintQuality = win32con.DMRES_MEDIUM
+                                devmode.Fields = devmode.Fields | win32con.DM_PRINTQUALITY
 
-                        hdc_handle = win32gui.CreateDC('WINSPOOL', target_printer, devmode)
-                        hdc = win32ui.CreateDCFromHandle(hdc_handle)
-                        print(f"[PRINT] Initialized DC with Landscape DEVMODE on {target_printer} [Media: {m_type}, Quality: {p_qual}]")
+                            hdc_handle = win32gui.CreateDC('WINSPOOL', target_printer, devmode)
+                            hdc = win32ui.CreateDCFromHandle(hdc_handle)
+                            print(f"[PRINT] Initialized DC with Landscape DEVMODE on {target_printer} [Media: {m_type}, Quality: {p_qual}]")
+                        finally:
+                            try:
+                                win32print.ClosePrinter(hPrinter)
+                            except Exception:
+                                pass
+                    except Exception as dce:
+                        print(f"[PRINT WARN] DevMode landscape init failed ({dce}), fallback to default DC")
+                        hdc = win32ui.CreateDC()
+                        hdc.CreatePrinterDC(target_printer)
+
+                    try:
+                        hdc.StartDoc(f"Photo Booth A4 - {Path(image_path).name}")
+                        hdc.StartPage()
+
+                        pw = hdc.GetDeviceCaps(win32con.HORZRES)
+                        ph = hdc.GetDeviceCaps(win32con.VERTRES)
+
+                        # Fit to page preserving aspect ratio
+                        scale = min(pw / iw, ph / ih)
+                        nw, nh = int(iw * scale), int(ih * scale)
+                        ox, oy = (pw - nw) // 2, (ph - nh) // 2
+
+                        dib = ImageWin.Dib(img)
+                        dib.draw(hdc.GetHandleOutput(), (ox, oy, ox + nw, oy + nh))
+
+                        hdc.EndPage()
+                        hdc.EndDoc()
                     finally:
                         try:
-                            win32print.ClosePrinter(hPrinter)
+                            hdc.DeleteDC()
                         except Exception:
                             pass
-                except Exception as dce:
-                    print(f"[PRINT WARN] DevMode landscape init failed ({dce}), fallback to default DC")
-                    hdc = win32ui.CreateDC()
-                    hdc.CreatePrinterDC(target_printer)
 
-                hdc.StartDoc(f"Photo Booth A4 - {Path(image_path).name}")
-                hdc.StartPage()
-
-                pw = hdc.GetDeviceCaps(win32con.HORZRES)
-                ph = hdc.GetDeviceCaps(win32con.VERTRES)
-
-                # Fit to page preserving aspect ratio
-                scale = min(pw / iw, ph / ih)
-                nw, nh = int(iw * scale), int(ih * scale)
-                ox, oy = (pw - nw) // 2, (ph - nh) // 2
-
-                dib = ImageWin.Dib(img)
-                dib.draw(hdc.GetHandleOutput(), (ox, oy, ox + nw, oy + nh))
-
-                hdc.EndPage()
-                hdc.EndDoc()
-                hdc.DeleteDC()
                 print(f"[PRINT] A4 printed successfully to {target_printer} ({pw}x{ph})")
                 return True, f"Printed to {target_printer}"
             except Exception as e:
@@ -1902,9 +1936,51 @@ class PrinterManager:
                 return False, f"Fallback print failed: {e}"
 
     def test_print(self) -> Tuple[bool, str]:
-        img = Image.new("RGB", (3508, 2480), color=(255, 255, 255))
+        # Generate an informative calibration test sheet
+        w, h = 3508, 2480
+        img = Image.new("RGB", (w, h), color=(255, 255, 255))
+        try:
+            from PIL import ImageDraw
+            draw = ImageDraw.Draw(img)
+            # Calibration banner
+            draw.rectangle([80, 40, 2400, 75], fill=(30, 41, 59))
+            draw.text((95, 48), "PHOTOBOOTH EXPO FIKSI 2026 - EPSON L1210 TEST PRINT & CALIBRATION", fill=(255, 255, 255))
+
+            dpi = int(config.get("print_dpi", 300))
+            px_per_cm = dpi / 2.54
+            target_h_cm = float(config.get("print_strip_height_cm", 12.0))
+            target_h = int(round(target_h_cm * px_per_cm))
+            target_w = int(round(1623 * (target_h / 3557)))
+            target_w_cm = target_w / px_per_cm
+
+            margin_x = 80
+            margin_y = 80
+
+            # Strip perimeter box
+            draw.rectangle([margin_x, margin_y, margin_x + target_w, margin_y + target_h], fill=(248, 250, 252), outline=(30, 41, 59), width=3)
+
+            # Color test swatches (Cyan, Magenta, Yellow, Black, Red, Green, Blue)
+            colors = [
+                (0, 168, 232),   # Cyan
+                (236, 72, 153),  # Magenta
+                (245, 158, 11),  # Yellow
+                (15, 23, 42),    # Black
+                (239, 68, 68),   # Red
+                (34, 197, 94),   # Green
+                (59, 130, 246),  # Blue
+            ]
+            block_h = (target_h - 220) // len(colors)
+            for idx, c in enumerate(colors):
+                by = margin_y + 80 + idx * block_h
+                draw.rectangle([margin_x + 40, by, margin_x + target_w - 40, by + block_h - 15], fill=c)
+
+            info_txt = f"Ukuran Strip: {target_w_cm:.2f} cm x {target_h_cm:.2f} cm | Kertas: A4 Landscape (297x210 mm) | DPI: {dpi}"
+            draw.text((margin_x, margin_y + target_h + 30), f"✂ {info_txt}", fill=(71, 85, 105))
+        except Exception as te:
+            print(f"[TEST PRINT WARN] Generating test pattern: {te}")
+
         test_path = str(PHOTOS_DIR / "test_print_a4.jpg")
-        img.save(test_path, quality=90)
+        img.save(test_path, quality=92)
         ok, msg = self.print_image(test_path)
         try:
             if os.path.exists(test_path):
@@ -2439,8 +2515,16 @@ class SessionController:
 
         if out_path:
             self.transition(SessionState.PREVIEW)
+            if config.get("auto_print", False):
+                threading.Thread(target=self._auto_print_trigger, daemon=True).start()
         else:
             self.transition(SessionState.FRAMES)
+
+    def _auto_print_trigger(self):
+        time.sleep(1.0)
+        with session_lock:
+            if session.state == SessionState.PREVIEW:
+                self.print_photo()
 
     def print_photo(self):
         self.transition(SessionState.PRINTING)
@@ -3296,6 +3380,19 @@ def api_print_saved_photo():
     file_path = str(PHOTOS_DIR / safe_name)
     if not os.path.exists(file_path):
         return jsonify({"ok": False, "error": "File does not exist"}), 404
+
+    # If an individual strip photo is selected, print the corresponding A4 sheet with cutlines
+    if safe_name.endswith("_final.jpg") or safe_name.endswith("_final.png"):
+        a4_name = safe_name.rsplit("_final", 1)[0] + "_a4_landscape.jpg"
+        a4_path = str(PHOTOS_DIR / a4_name)
+        if os.path.exists(a4_path):
+            file_path = a4_path
+        else:
+            sid = safe_name.rsplit("_final", 1)[0]
+            gen_a4 = frame_manager.generate_a4_sheet(file_path, sid)
+            if gen_a4 and os.path.exists(gen_a4):
+                file_path = gen_a4
+
     ok, msg = printer_manager.print_image(file_path)
     return jsonify({
         "ok": ok,
@@ -3374,6 +3471,16 @@ def api_settings():
         allowed = set(config.keys())
         for k, v in updates.items():
             if k in allowed:
+                if k in ("print_strip_copies", "countdown_duration", "camera_index", "camera_fps", "photo_jpeg_quality", "photobooth_price", "print_dpi", "payment_timeout_sec", "print_fallback_sec", "auto_reset_timeout"):
+                    try:
+                        v = int(v)
+                    except Exception:
+                        pass
+                elif k in ("print_strip_height_cm", "hand_confidence", "gesture_confidence", "gesture_smoothing", "hand_min_size", "primary_user_sensitivity"):
+                    try:
+                        v = float(v)
+                    except Exception:
+                        pass
                 config[k] = v
         if updates.get("controller_mode") in ("hybrid", "touchpad_only"):
             config["block_touchpad"] = False
